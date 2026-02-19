@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: darwinfuse
+Description: Userspace NFSv4-based FUSE replacement for macOS (drop-in for macFUSE)
+URL: https://github.com/basalt-project/DarwinFUSE
+Version: @VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -ldarwinfuse

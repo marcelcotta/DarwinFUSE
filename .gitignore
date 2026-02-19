@@ -1,0 +1,13 @@
+# Build artifacts
+*.o
+*.a
+*.d
+
+# Example binaries
+examples/hello
+
+# Python
+__pycache__/
+
+# macOS
+.DS_Store
