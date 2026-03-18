@@ -2,7 +2,7 @@
 # DarwinFUSE — Userspace FUSE for macOS via NFSv4 loopback
 #
 # Targets:
-#   all        Build static and dynamic libraries (default)
+#   all        Build universal (arm64+x86_64) static and dynamic libraries (default)
 #   static     Build libdarwinfuse.a only
 #   dylib      Build libdarwinfuse.dylib only
 #   examples   Build example programs
@@ -15,6 +15,7 @@
 CC      ?= cc
 AR      ?= ar
 RANLIB  ?= ranlib
+LIPO    ?= lipo
 PREFIX  ?= /usr/local
 VERSION ?= 1.0.0
 
@@ -23,13 +24,16 @@ VERSION ?= 1.0.0
 DYLIB_COMPAT_VERSION  ?= 12.0.0
 DYLIB_CURRENT_VERSION ?= 12.9.0
 
-CFLAGS  += -Wall -Wextra -Wno-unused-parameter -std=c11 \
-           -Iinclude -Isrc -D_FILE_OFFSET_BITS=64
+# Universal binary architectures
+ARCHS ?= arm64 x86_64
+
+CFLAGS_BASE := -Wall -Wextra -Wno-unused-parameter -std=c11 \
+               -Iinclude -Isrc -D_FILE_OFFSET_BITS=64
 
 ifeq ($(DEBUG),1)
-    CFLAGS += -g -DDEBUG
+    CFLAGS_BASE += -g -DDEBUG
 else
-    CFLAGS += -O2
+    CFLAGS_BASE += -O2
 endif
 
 # ---- Library sources ----
@@ -43,12 +47,13 @@ LIB_SRCS := \
 	src/fuse_opt.c \
 	src/darwinfuse.c
 
-LIB_OBJS     := $(LIB_SRCS:.c=.o)
-LIB_PIC_OBJS := $(LIB_SRCS:.c=.pic.o)
-
 STATIC_LIB := libdarwinfuse.a
 DYLIB      := libdarwinfuse.2.dylib
 DYLIB_LINK := libdarwinfuse.dylib
+
+# ---- Per-arch build directories ----
+
+BUILD_DIRS := $(foreach arch,$(ARCHS),build/$(arch))
 
 # ---- Examples ----
 
@@ -64,33 +69,65 @@ static: $(STATIC_LIB)
 
 dylib: $(DYLIB)
 
-$(STATIC_LIB): $(LIB_OBJS)
-	@echo "  AR    $@"
-	$(AR) rcs $@ $(LIB_OBJS)
-	$(RANLIB) $@
+# Build objects for a single architecture into build/<arch>/
+define ARCH_RULES
+build/$(1)/%.o: %.c | build/$(1)/src
+	@echo "  CC    $$< ($(1))"
+	$$(CC) $$(CFLAGS_BASE) -arch $(1) -c $$< -o $$@
 
-# Position-independent objects for dylib
-%.pic.o: %.c
-	@echo "  CC    $< (PIC)"
-	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+build/$(1)/%.pic.o: %.c | build/$(1)/src
+	@echo "  CC    $$< ($(1) PIC)"
+	$$(CC) $$(CFLAGS_BASE) -arch $(1) -fPIC -c $$< -o $$@
 
-$(DYLIB): $(LIB_PIC_OBJS)
-	@echo "  DYLIB $@"
-	$(CC) -dynamiclib -o $@ $(LIB_PIC_OBJS) \
-	    -install_name $(PREFIX)/lib/libfuse.2.dylib \
-	    -compatibility_version $(DYLIB_COMPAT_VERSION) \
-	    -current_version $(DYLIB_CURRENT_VERSION)
+build/$(1)/src:
+	@mkdir -p build/$(1)/src
+endef
+
+$(foreach arch,$(ARCHS),$(eval $(call ARCH_RULES,$(arch))))
+
+# Per-arch object lists
+ARCH_OBJS     = $(foreach src,$(LIB_SRCS),build/$(1)/$(src:.c=.o))
+ARCH_PIC_OBJS = $(foreach src,$(LIB_SRCS),build/$(1)/$(src:.c=.pic.o))
+
+# Per-arch static libraries
+define ARCH_STATIC
+build/$(1)/libdarwinfuse.a: $(call ARCH_OBJS,$(1))
+	@echo "  AR    $$@ ($(1))"
+	$$(AR) rcs $$@ $$^
+	$$(RANLIB) $$@
+endef
+
+$(foreach arch,$(ARCHS),$(eval $(call ARCH_STATIC,$(arch))))
+
+# Per-arch dylibs
+define ARCH_DYLIB
+build/$(1)/libdarwinfuse.2.dylib: $(call ARCH_PIC_OBJS,$(1))
+	@echo "  DYLIB $$@ ($(1))"
+	$$(CC) -dynamiclib -arch $(1) -o $$@ $$^ \
+	    -install_name $$(PREFIX)/lib/libfuse.2.dylib \
+	    -compatibility_version $$(DYLIB_COMPAT_VERSION) \
+	    -current_version $$(DYLIB_CURRENT_VERSION)
+endef
+
+$(foreach arch,$(ARCHS),$(eval $(call ARCH_DYLIB,$(arch))))
+
+# Universal static library via lipo
+$(STATIC_LIB): $(foreach arch,$(ARCHS),build/$(arch)/libdarwinfuse.a)
+	@echo "  LIPO  $@ ($(ARCHS))"
+	$(LIPO) -create $^ -output $@
+
+# Universal dylib via lipo
+$(DYLIB): $(foreach arch,$(ARCHS),build/$(arch)/libdarwinfuse.2.dylib)
+	@echo "  LIPO  $@ ($(ARCHS))"
+	$(LIPO) -create $^ -output $@
 	ln -sf $(DYLIB) $(DYLIB_LINK)
 
-%.o: %.c
-	@echo "  CC    $<"
-	$(CC) $(CFLAGS) -c $< -o $@
-
+# Examples (universal)
 examples: $(STATIC_LIB) $(EXAMPLES)
 
 examples/hello: examples/hello.c $(STATIC_LIB)
-	@echo "  CC    $@"
-	$(CC) $(CFLAGS) -o $@ $< -L. -ldarwinfuse
+	@echo "  CC    $@ (universal)"
+	$(CC) $(CFLAGS_BASE) $(foreach arch,$(ARCHS),-arch $(arch)) -o $@ $< -L. -ldarwinfuse
 
 # ---- Install / Uninstall ----
 
@@ -144,5 +181,5 @@ pkg: $(STATIC_LIB) $(DYLIB)
 # ---- Clean ----
 
 clean:
-	rm -f $(LIB_OBJS) $(LIB_PIC_OBJS) $(LIB_OBJS:.o=.d) \
-	      $(STATIC_LIB) $(DYLIB) $(DYLIB_LINK) $(EXAMPLES)
+	rm -rf build/
+	rm -f $(STATIC_LIB) $(DYLIB) $(DYLIB_LINK) $(EXAMPLES)
