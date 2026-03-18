@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>DarwinFUSE</title>
+    <organization>io.darwinfuse</organization>
+    <domains enable_localSystem="true" />
+
+    <!-- Minimum macOS 12 Monterey -->
+    <allowed-os-versions>
+        <os-version min="12.0" />
+    </allowed-os-versions>
+
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64" />
+
+    <!-- Resources -->
+    <welcome    file="welcome.html" />
+    <conclusion file="conclusion.html" />
+
+    <!-- Installation check: reject if macFUSE is installed -->
+    <installation-check script="installcheck()" />
+    <script>
+function installcheck() {
+    if (!system.files.fileExistsAtPath('/Library/Filesystems/macfuse.fs') &amp;&amp;
+        !system.files.fileExistsAtPath('/Library/Frameworks/macFUSE.framework')) {
+        return true;
+    }
+
+    var lang = system.language.substr(0, 2);
+
+    var titles = {
+        'en': 'macFUSE Detected',
+        'de': 'macFUSE erkannt',
+        'fr': 'macFUSE détecté',
+        'es': 'macFUSE detectado',
+        'ja': 'macFUSEが検出されました',
+        'zh': '检测到macFUSE'
+    };
+
+    var msgs = {
+        'en': 'macFUSE is currently installed. Please uninstall it first '
+            + '(System Settings > macFUSE > Remove), then re-run this installer.\n\n'
+            + 'After removing macFUSE you can re-enable SIP:\n\n'
+            + 'GUI: Recovery Mode > Utilities > Startup Security Utility > Full Security\n'
+            + 'Terminal: Recovery Mode > Utilities > Terminal > csrutil enable',
+
+        'de': 'macFUSE ist derzeit installiert. Bitte deinstallieren Sie es zuerst '
+            + '(Systemeinstellungen > macFUSE > Entfernen) und starten Sie dann diesen Installer erneut.\n\n'
+            + 'Nach der Deinstallation können Sie SIP wieder aktivieren:\n\n'
+            + 'GUI: Recovery-Modus > Dienstprogramme > Startsicherheitsdienstprogramm > Volle Sicherheit\n'
+            + 'Terminal: Recovery-Modus > Dienstprogramme > Terminal > csrutil enable',
+
+        'fr': 'macFUSE est actuellement installé. Veuillez d\'abord le désinstaller '
+            + '(Réglages du système > macFUSE > Supprimer), puis relancez cet installateur.\n\n'
+            + 'Après la suppression de macFUSE, vous pouvez réactiver SIP :\n\n'
+            + 'GUI : Mode récupération > Utilitaires > Utilitaire de sécurité au démarrage > Sécurité maximale\n'
+            + 'Terminal : Mode récupération > Utilitaires > Terminal > csrutil enable',
+
+        'es': 'macFUSE está instalado actualmente. Desinstálelo primero '
+            + '(Ajustes del Sistema > macFUSE > Eliminar) y vuelva a ejecutar este instalador.\n\n'
+            + 'Después de eliminar macFUSE puede reactivar SIP:\n\n'
+            + 'GUI: Modo recuperación > Utilidades > Utilidad de seguridad de arranque > Seguridad máxima\n'
+            + 'Terminal: Modo recuperación > Utilidades > Terminal > csrutil enable',
+
+        'ja': 'macFUSEが現在インストールされています。まずmacFUSEをアンインストールしてください'
+            + '（システム設定 > macFUSE > 削除）。その後、このインストーラを再実行してください。\n\n'
+            + 'macFUSE削除後、SIPを再有効化できます：\n\n'
+            + 'GUI：リカバリーモード > ユーティリティ > 起動セキュリティユーティリティ > 完全なセキュリティ\n'
+            + 'ターミナル：リカバリーモード > ユーティリティ > ターミナル > csrutil enable',
+
+        'zh': '当前已安装macFUSE。请先卸载macFUSE'
+            + '（系统设置 > macFUSE > 移除），然后重新运行此安装器。\n\n'
+            + '卸载macFUSE后，您可以重新启用SIP：\n\n'
+            + 'GUI：恢复模式 > 实用工具 > 启动安全性实用工具 > 完全安全性\n'
+            + '终端：恢复模式 > 实用工具 > 终端 > csrutil enable'
+    };
+
+    my.result.title   = titles[lang] || titles['en'];
+    my.result.message  = msgs[lang] || msgs['en'];
+    my.result.type    = 'Fatal';
+    return false;
+}
+    </script>
+
+    <!-- Component package -->
+    <choices-outline>
+        <line choice="default">
+            <line choice="io.darwinfuse.pkg.core" />
+        </line>
+    </choices-outline>
+
+    <choice id="default" />
+
+    <choice id="io.darwinfuse.pkg.core"
+            visible="false"
+            selected="true"
+            title="DarwinFUSE Core">
+        <pkg-ref id="io.darwinfuse.pkg.core" />
+    </choice>
+
+    <pkg-ref id="io.darwinfuse.pkg.core"
+             version="__VERSION__"
+             onConclusion="none">DarwinFUSE-core.pkg</pkg-ref>
+</installer-gui-script>

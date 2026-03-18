@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #333;
+    padding: 10px 0;
+}
+h1 { font-size: 18px; font-weight: 600; margin-bottom: 12px; }
+h2 { font-size: 14px; font-weight: 600; margin-top: 16px; margin-bottom: 6px; }
+.highlight { color: #0066CC; font-weight: 600; }
+ul { padding-left: 20px; }
+li { margin-bottom: 4px; }
+code {
+    font-size: 12px;
+}
+</style>
+</head>
+<body>
+
+<h1>DarwinFUSE</h1>
+
+<p>A complete <span class="highlight">FUSE implementation for macOS</span> that runs
+entirely in userspace — no kernel extension, no SIP changes, no third-party
+dependencies.</p>
+
+<h2>What this installer does</h2>
+<ul>
+    <li>Installs the DarwinFUSE dynamic library (<code>libfuse.2.dylib</code>)</li>
+    <li>Installs macFUSE-compatible headers and pkg-config files</li>
+    <li>Creates compatibility symlinks so existing FUSE programs work</li>
+</ul>
+
+<p>Existing FUSE programs (sshfs, encfs, ntfs-3g, ...) will work
+without recompilation.</p>
+
+</body>
+</html>

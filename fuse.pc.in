@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: fuse
+Description: DarwinFUSE — drop-in replacement for macFUSE (no kext, no SIP)
+URL: https://github.com/marcelcotta/DarwinFUSE
+Version: 2.9.9
+Cflags: -I${includedir}/fuse -D_FILE_OFFSET_BITS=64
+Libs: -L${libdir} -lfuse

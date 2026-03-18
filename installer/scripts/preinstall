@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# DarwinFUSE — .pkg preinstall script
+#
+# Checks for macFUSE and warns the user.
+#
+
+set -euo pipefail
+
+# macOS version check
+MACOS_VERSION="$(sw_vers -productVersion)"
+MACOS_MAJOR="${MACOS_VERSION%%.*}"
+
+if [[ "$MACOS_MAJOR" -lt 12 ]]; then
+    echo "DarwinFUSE requires macOS 12 (Monterey) or later." >&2
+    echo "Detected: macOS $MACOS_VERSION" >&2
+    exit 1
+fi
+
+# Check for macFUSE — fail if present
+if [[ -d "/Library/Filesystems/macfuse.fs" ]] || \
+   [[ -d "/Library/Frameworks/macFUSE.framework" ]]; then
+    echo "" >&2
+    echo "================================================================" >&2
+    echo "  macFUSE is currently installed on this system." >&2
+    echo "" >&2
+    echo "  Please uninstall macFUSE before installing DarwinFUSE:" >&2
+    echo "" >&2
+    echo "  1. Open System Settings > macFUSE > Remove" >&2
+    echo "     or run:" >&2
+    echo "     open /Library/Filesystems/macfuse.fs/Contents/Resources/uninstall_macfuse.app" >&2
+    echo "" >&2
+    echo "  2. Optionally re-enable SIP afterwards:" >&2
+    echo "     Boot into Recovery Mode (hold Power button) and either:" >&2
+    echo "     - GUI: Utilities > Startup Security Utility > Full Security" >&2
+    echo "     - Terminal: Utilities > Terminal > csrutil enable" >&2
+    echo "" >&2
+    echo "  3. Re-run the DarwinFUSE installer." >&2
+    echo "================================================================" >&2
+    echo "" >&2
+    exit 1
+fi
+
+# Ensure target directories exist
+install -d /usr/local/lib /usr/local/lib/pkgconfig \
+           /usr/local/include /usr/local/share
+
+exit 0

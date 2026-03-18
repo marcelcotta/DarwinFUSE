@@ -1,0 +1,36 @@
+#!/bin/bash
+#
+# DarwinFUSE — .pkg postinstall script
+#
+# Creates compatibility symlinks and the installation receipt.
+#
+
+set -euo pipefail
+
+PREFIX="/usr/local"
+
+# Compatibility symlinks
+ln -sf libfuse.2.dylib "$PREFIX/lib/libfuse.dylib"
+ln -sf libfuse.2.dylib "$PREFIX/lib/libdarwinfuse.2.dylib"
+ln -sf libfuse.2.dylib "$PREFIX/lib/libdarwinfuse.dylib"
+
+# Top-level fuse.h wrapper for #include <fuse.h>
+printf '#include "fuse/fuse.h"\n' > "$PREFIX/include/fuse.h"
+
+# Ensure reasonable permissions
+chmod -R a+rX "$PREFIX/include/fuse" "$PREFIX/include/darwinfuse" 2>/dev/null || true
+chmod a+rx "$PREFIX/lib" "$PREFIX/include" 2>/dev/null || true
+
+# Receipt
+install -d "$PREFIX/share/darwinfuse"
+cat > "$PREFIX/share/darwinfuse/receipt.json" <<RECEIPT
+{
+  "name": "DarwinFUSE",
+  "version": "__VERSION__",
+  "installed": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "method": "pkg",
+  "prefix": "$PREFIX"
+}
+RECEIPT
+
+exit 0

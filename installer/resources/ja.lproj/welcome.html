@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<style>
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #333;
+    padding: 10px 0;
+}
+h1 { font-size: 18px; font-weight: 600; margin-bottom: 12px; }
+h2 { font-size: 14px; font-weight: 600; margin-top: 16px; margin-bottom: 6px; }
+.highlight { color: #0066CC; font-weight: 600; }
+ul { padding-left: 20px; }
+li { margin-bottom: 4px; }
+code { font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>DarwinFUSE</h1>
+
+<p>完全にユーザー空間で動作する<span class="highlight">macOS向けFUSE実装</span>です。
+カーネル拡張不要、SIPの変更不要、サードパーティ依存なし。</p>
+
+<h2>このインストーラの内容</h2>
+<ul>
+    <li>DarwinFUSE動的ライブラリ（<code>libfuse.2.dylib</code>）をインストール</li>
+    <li>macFUSE互換のヘッダーとpkg-configファイルをインストール</li>
+    <li>既存のFUSEプログラム向けに互換シンボリックリンクを作成</li>
+</ul>
+
+<p>既存のFUSEプログラム（sshfs、encfs、ntfs-3gなど）は
+再コンパイルなしで動作します。</p>
+
+</body>
+</html>

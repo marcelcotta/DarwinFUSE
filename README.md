@@ -13,12 +13,46 @@ compatibility without touching the kernel.
 > Works on every Mac from macOS 12 Monterey onwards, including Apple Silicon,
 > with zero system modifications.
 
+## Installation
+
+### GUI Installer (recommended)
+
+Download the latest `.pkg` from the [Releases](https://github.com/marcelcotta/DarwinFUSE/releases) page and open it.
+
+The installer checks for an existing macFUSE installation and will guide you through
+removal if needed. After installing DarwinFUSE, existing FUSE programs (sshfs, encfs,
+ntfs-3g, ...) work without recompilation.
+
+An uninstaller app is included at `/Applications/DarwinFUSE/Uninstall DarwinFUSE.app`.
+
+### Build from source
+
+```sh
+make                        # builds libdarwinfuse.a + libdarwinfuse.2.dylib
+sudo make install           # installs to /usr/local with macFUSE-compatible symlinks
+make pkg                    # builds a .pkg installer into build/
+```
+
+### Command-line installer
+
+```sh
+sudo ./installer/install.sh
+```
+
+### Uninstall
+
+Either open `/Applications/DarwinFUSE/Uninstall DarwinFUSE.app` or run:
+
+```sh
+sudo ./installer/uninstall.sh
+```
+
 ## How It Works
 
 ```
 Your FUSE program (sshfs, encfs, ntfs-3g, ...)
     | fuse_operations callbacks
-DarwinFUSE (libdarwinfuse.a)
+DarwinFUSE (libfuse.2.dylib / libdarwinfuse.a)
     | NFSv4 COMPOUND translation
 NFS server on 127.0.0.1:<ephemeral port>
     | mount_nfs (built into macOS)
@@ -39,8 +73,20 @@ with macFUSE or libfuse on Linux.
 ## macFUSE Compatibility
 
 DarwinFUSE implements the full libfuse 2.9 API plus macFUSE's Apple-specific
-extensions. The goal is source-level compatibility: if it compiles against macFUSE,
-it compiles against DarwinFUSE.
+extensions. It installs as `libfuse.2.dylib` with the same install_name and
+version numbers as macFUSE, so existing compiled binaries work unchanged.
+
+### What gets installed
+
+| Path | Description |
+|------|-------------|
+| `/usr/local/lib/libfuse.2.dylib` | Dynamic library (macFUSE-compatible install_name) |
+| `/usr/local/lib/libfuse.dylib` | Symlink |
+| `/usr/local/lib/libdarwinfuse.a` | Static library |
+| `/usr/local/include/fuse/` | macFUSE-compatible headers |
+| `/usr/local/include/darwinfuse/` | DarwinFUSE headers |
+| `/usr/local/lib/pkgconfig/fuse.pc` | macFUSE-compatible pkg-config |
+| `/Applications/DarwinFUSE/` | Uninstaller app |
 
 ### FUSE Operations
 
@@ -115,15 +161,6 @@ volume-level operations that don't apply to the DarwinFUSE use case.
 | **encfs** | ~31 ops + xattrs | API-complete |
 | **ntfs-3g** | ~33 ops + xtimes | API-complete (minus ioctl) |
 
-## Building
-
-Requires: macOS 12+, Xcode Command Line Tools.
-
-```sh
-make                # builds libdarwinfuse.a
-make examples       # builds examples/hello
-```
-
 ## Quick Start
 
 ```sh
@@ -136,7 +173,7 @@ umount /tmp/hello
 
 ## Using in Your Project
 
-Link against `libdarwinfuse.a` and include `<fuse.h>`:
+Link against `libdarwinfuse.a` (static) or `libfuse.dylib` (dynamic) and include `<fuse.h>`:
 
 ```c
 #define FUSE_USE_VERSION 26
@@ -162,7 +199,9 @@ int main(int argc, char *argv[]) {
 Compile:
 
 ```sh
-cc -o myfs myfs.c -I/path/to/darwinfuse/include -L/path/to/darwinfuse -ldarwinfuse
+cc -o myfs myfs.c $(pkg-config --cflags --libs fuse)
+# or directly:
+cc -o myfs myfs.c -I/usr/local/include/fuse -L/usr/local/lib -lfuse
 ```
 
 ### Component API (sshfs-style)
@@ -184,6 +223,7 @@ fuse_unmount("/mnt/point", ch);
 include/
     fuse.h              Public API (libfuse 2.9 + macFUSE compatible)
     fuse_opt.h          Option parsing API
+    fuse_common.h       Compatibility shim
 
 src/
     darwinfuse.c        fuse_main, component API, signal handling, daemonization
@@ -198,7 +238,27 @@ src/
     inode_table.h       Inode table API (incl. xattr virtual inodes)
     fuse_opt.c          fuse_opt_parse implementation
     fuse_context.h      Thread-local context management
+
+installer/
+    install.sh          Command-line installer
+    uninstall.sh        Command-line uninstaller
+    build_pkg.sh        Builds .pkg GUI installer
+    Distribution.xml    macOS installer distribution (multilingual)
+    uninstall.applescript   Uninstaller app source (multilingual)
+    resources/          Localized installer screens (en, de, fr, es, ja, zh-Hans)
 ```
+
+## Replacing macFUSE
+
+DarwinFUSE is designed as a complete macFUSE replacement. To switch:
+
+1. Uninstall macFUSE using its built-in uninstaller (System Settings > macFUSE > Remove)
+2. Optionally re-enable SIP (Recovery Mode > Startup Security Utility > Full Security)
+3. Install DarwinFUSE via the `.pkg` installer or `sudo make install`
+
+Existing Homebrew-installed FUSE programs will work without reinstallation because
+DarwinFUSE installs `libfuse.2.dylib` with the same install_name and library version
+numbers as macFUSE.
 
 ## Origins
 
