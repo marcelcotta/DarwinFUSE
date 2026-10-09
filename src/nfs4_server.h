@@ -31,9 +31,24 @@ typedef struct darwinfuse_server darwinfuse_server_t;
  * Create and bind the TCP server on 127.0.0.1 with an ephemeral port.
  * On success, sets *port to the bound port number and returns the server.
  * On failure, returns NULL.
+ *
+ * SECURITY: a loopback TCP port is reachable by every local user and process,
+ * and AUTH_SYS credentials are client-asserted. Prefer
+ * nfs4_server_create_local(); this is only a fallback.
  */
 darwinfuse_server_t *nfs4_server_create(const darwinfuse_config_t *config,
                                          uint16_t *port);
+
+/*
+ * Create and bind the server on a Unix domain socket inside a freshly created
+ * private directory (mode 0700, owned by the effective user), so that only
+ * this user, root and the kernel NFS client can connect. Connections from
+ * other UIDs are additionally rejected via LOCAL_PEERCRED.
+ * On success, sets *socket_path (owned by the server) and returns the server.
+ * The socket and its directory are removed by nfs4_server_destroy().
+ */
+darwinfuse_server_t *nfs4_server_create_local(const darwinfuse_config_t *config,
+                                               const char **socket_path);
 
 /*
  * Run the NFS event loop. Blocks until the server is stopped

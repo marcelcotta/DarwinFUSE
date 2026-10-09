@@ -4,9 +4,9 @@
 </p>
 
 DarwinFUSE is a drop-in replacement for macFUSE that runs entirely in userspace.
-It translates FUSE callbacks into NFSv4 operations over a localhost loopback server,
-using macOS's built-in `mount_nfs` to mount the filesystem. The result: full FUSE
-compatibility without touching the kernel.
+It translates FUSE callbacks into NFSv4 operations served over a private local
+socket, using macOS's built-in `mount_nfs` to mount the filesystem. The result:
+full FUSE compatibility without touching the kernel.
 
 > **No kext. No System Extension. No SIP disable. No macFUSE installation.**
 >
@@ -54,21 +54,35 @@ Your FUSE program (sshfs, encfs, ntfs-3g, ...)
     | fuse_operations callbacks
 DarwinFUSE (libfuse.2.dylib / libdarwinfuse.a)
     | NFSv4 COMPOUND translation
-NFS server on 127.0.0.1:<ephemeral port>
+NFS server on a Unix socket in a private 0700 directory
     | mount_nfs (built into macOS)
 /your/mount/point
 ```
 
 When you call `fuse_main()`, DarwinFUSE:
 
-1. Starts a lightweight NFSv4 TCP server on `127.0.0.1` with an ephemeral port
-2. Calls `mount_nfs` to mount the server at your chosen mount point
+1. Starts a lightweight NFSv4 server on a Unix domain socket inside a private
+   directory (mode 0700, `$TMPDIR/darwinfuse.XXXXXX/nfs.sock`)
+2. Calls `/sbin/mount_nfs -o proto=ticotsord,port=<socket>` to mount it at your
+   chosen mount point
 3. Translates incoming NFS operations into your `fuse_operations` callbacks
 4. Optionally daemonizes and runs a multi-threaded worker pool
 
 Your FUSE program doesn't need to know or care that NFS is involved — the API
 is the same `fuse_main()` / `fuse_get_context()` / `fuse_operations` you'd use
 with macFUSE or libfuse on Linux.
+
+### Security model
+
+Only the mounting user, root and the kernel NFS client can reach the server:
+the socket directory is private, and connections from other UIDs are rejected
+(`LOCAL_PEERCRED`). NFS component names containing `/`, NUL, `.` or `..` are
+refused, so a client cannot address paths outside the directory it names.
+
+Earlier versions listened on a loopback TCP port, which any local process could
+connect to. If the local-socket mount fails, DarwinFUSE still falls back to that
+transport and prints a warning; build with `-DDFUSE_TCP_FALLBACK=0` to make this a
+hard error.
 
 ## macFUSE Compatibility
 

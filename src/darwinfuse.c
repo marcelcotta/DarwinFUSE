@@ -77,10 +77,12 @@ struct fuse {
 
 static struct fuse *g_fuse = NULL;
 static darwinfuse_server_t *g_server = NULL;
+static volatile sig_atomic_t g_signalled = 0;
 
 static void signal_handler(int sig)
 {
     (void)sig;
+    g_signalled = 1;
     if (g_fuse)
         fuse_exit(g_fuse);
     else if (g_server)
@@ -216,16 +218,44 @@ static int parse_args(int argc, char *argv[], parsed_args_t *out)
 
 /* ---- Mount via mount_nfs ---- */
 
-static int do_mount_nfs(uint16_t port, const char *mount_point,
-                         const parsed_args_t *args)
+/*
+ * Transport selection. The NFS server preferably listens on a Unix domain
+ * socket in a private 0700 directory (supported by macOS' mount_nfs and NFS
+ * client since 10.15 via "proto=ticotsord,port=/path"). A loopback TCP port
+ * would be reachable by every local user and process, and the AUTH_SYS
+ * credentials an NFS client sends are not authenticated.
+ *
+ * DFUSE_TCP_FALLBACK=1 retries over loopback TCP if the local-socket mount
+ * fails. Set it to 0 to fail closed once the local transport has been
+ * verified on all supported macOS versions.
+ */
+#ifndef DFUSE_TCP_FALLBACK
+#define DFUSE_TCP_FALLBACK 1
+#endif
+
+static int do_mount_nfs(uint16_t port, const char *socket_path,
+                        const char *mount_point, const parsed_args_t *args)
 {
     char opts[512];
-    int len = snprintf(opts, sizeof(opts),
-        "vers=4,tcp,noac,noacl,noresvport,"
-        "rsize=65536,wsize=65536,"
-        "soft,intr,retrycnt=0,"
-        "port=%u",
-        (unsigned)port);
+    char spec[200];
+    int len;
+
+    if (socket_path) {
+        len = snprintf(opts, sizeof(opts),
+            "vers=4,proto=ticotsord,port=%s,noac,noacl,noresvport,"
+            "rsize=65536,wsize=65536,"
+            "soft,intr,retrycnt=0",
+            socket_path);
+        snprintf(spec, sizeof(spec), "<%s>:/", socket_path);
+    } else {
+        len = snprintf(opts, sizeof(opts),
+            "vers=4,tcp,noac,noacl,noresvport,"
+            "rsize=65536,wsize=65536,"
+            "soft,intr,retrycnt=0,"
+            "port=%u",
+            (unsigned)port);
+        snprintf(spec, sizeof(spec), "127.0.0.1:/");
+    }
 
     if (args && args->nosuid)
         len += snprintf(opts + len, sizeof(opts) - (size_t)len, ",nosuid");
@@ -236,7 +266,12 @@ static int do_mount_nfs(uint16_t port, const char *mount_point,
     if (args && args->nobrowse)
         len += snprintf(opts + len, sizeof(opts) - (size_t)len, ",nobrowse");
 
-    DFUSE_LOG("mount_nfs -o %s 127.0.0.1:/ %s", opts, mount_point);
+    if (len < 0 || (size_t)len >= sizeof(opts)) {
+        DFUSE_ERR("mount options too long");
+        return -1;
+    }
+
+    DFUSE_LOG("mount_nfs -o %s %s %s", opts, spec, mount_point);
 
     int err_pipe[2];
     if (pipe(err_pipe) < 0) {
@@ -256,11 +291,12 @@ static int do_mount_nfs(uint16_t port, const char *mount_point,
         close(err_pipe[0]);
         dup2(err_pipe[1], STDERR_FILENO);
         close(err_pipe[1]);
-        execlp("mount_nfs", "mount_nfs",
-               "-o", opts,
-               "127.0.0.1:/",
-               mount_point,
-               NULL);
+        /* Absolute path: never resolve system tools via $PATH */
+        execl("/sbin/mount_nfs", "mount_nfs",
+              "-o", opts,
+              spec,
+              mount_point,
+              (char *)NULL);
         _exit(127);
     }
 
@@ -269,14 +305,16 @@ static int do_mount_nfs(uint16_t port, const char *mount_point,
     char errbuf[1024];
     ssize_t errlen = 0;
     ssize_t n;
-    while ((n = read(err_pipe[0], errbuf + errlen,
+    while (errlen < (ssize_t)sizeof(errbuf) - 1 &&
+           (n = read(err_pipe[0], errbuf + errlen,
                      sizeof(errbuf) - 1 - (size_t)errlen)) > 0)
         errlen += n;
     errbuf[errlen] = '\0';
     close(err_pipe[0]);
 
     int status;
-    if (waitpid(pid, &status, 0) < 0) {
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
         DFUSE_ERR("waitpid failed: %s", strerror(errno));
         return -1;
     }
@@ -290,6 +328,62 @@ static int do_mount_nfs(uint16_t port, const char *mount_point,
 
     DFUSE_LOG("mount_nfs succeeded");
     return 0;
+}
+
+/*
+ * Create the NFS server, run its event loop in a background thread (so it
+ * can answer the kernel's requests during mount) and mount it. Tries the
+ * private Unix socket first and, if allowed, loopback TCP as a fallback.
+ * On success the server thread is still running; *port is 0 for the local
+ * transport. On failure everything is cleaned up and NULL is returned.
+ */
+static darwinfuse_server_t *create_and_mount(const darwinfuse_config_t *config,
+                                             const char *mount_point,
+                                             const parsed_args_t *args,
+                                             pthread_t *srv_thread,
+                                             uint16_t *port)
+{
+    for (int attempt = 0; attempt < 2; attempt++) {
+        const char *socket_path = NULL;
+        darwinfuse_server_t *srv;
+
+        *port = 0;
+        if (attempt == 0) {
+            srv = nfs4_server_create_local(config, &socket_path);
+        } else if (g_signalled) {
+            break;  /* interrupted during the first attempt — do not retry */
+        } else {
+#if DFUSE_TCP_FALLBACK
+            DFUSE_ERR("Local-socket NFS mount failed; falling back to loopback TCP "
+                      "(reachable by other local users)");
+            srv = nfs4_server_create(config, port);
+#else
+            break;
+#endif
+        }
+
+        if (!srv)
+            continue;
+
+        if (pthread_create(srv_thread, NULL,
+                           (void *(*)(void *))nfs4_server_run, srv) != 0) {
+            DFUSE_ERR("Failed to create server thread");
+            nfs4_server_destroy(srv);
+            continue;
+        }
+
+        g_server = srv;  /* a signal during mount stops the server */
+        if (do_mount_nfs(*port, socket_path, mount_point, args) == 0)
+            return srv;
+
+        nfs4_server_stop(srv);
+        pthread_join(*srv_thread, NULL);
+        g_server = NULL;
+        nfs4_server_destroy(srv);
+    }
+
+    DFUSE_ERR("Failed to mount NFS");
+    return NULL;
 }
 
 /* ---- Component API implementation ---- */
@@ -328,32 +422,13 @@ struct fuse_chan *fuse_mount(const char *mountpoint, struct fuse_args *args)
     config.gid = getgid();
     config.inode_table = itable;
 
-    /* Create NFS server */
+    /* Create NFS server, start temporary server thread and mount */
     uint16_t port = 0;
-    darwinfuse_server_t *srv = nfs4_server_create(&config, &port);
-    if (!srv) {
-        DFUSE_ERR("Failed to create NFS server");
-        dfuse_itable_destroy(itable);
-        return NULL;
-    }
-
-    /* Start temporary server thread for mount */
     pthread_t srv_thread;
-    if (pthread_create(&srv_thread, NULL,
-                       (void *(*)(void *))nfs4_server_run, srv) != 0) {
-        DFUSE_ERR("Failed to create server thread");
-        nfs4_server_destroy(srv);
-        dfuse_itable_destroy(itable);
-        return NULL;
-    }
-
-    /* Mount */
     darwinfuse_set_context(getuid(), getgid());
-    if (do_mount_nfs(port, mountpoint, &mount_args) < 0) {
-        DFUSE_ERR("Failed to mount NFS");
-        nfs4_server_stop(srv);
-        pthread_join(srv_thread, NULL);
-        nfs4_server_destroy(srv);
+    darwinfuse_server_t *srv = create_and_mount(&config, mountpoint, &mount_args,
+                                                &srv_thread, &port);
+    if (!srv) {
         dfuse_itable_destroy(itable);
         return NULL;
     }
@@ -385,7 +460,7 @@ void fuse_unmount(const char *mountpoint, struct fuse_chan *ch)
         /* Attempt to unmount */
         pid_t pid = fork();
         if (pid == 0) {
-            execlp("umount", "umount", mountpoint, NULL);
+            execl("/sbin/umount", "umount", mountpoint, (char *)NULL);
             _exit(127);
         }
         if (pid > 0) {
@@ -660,41 +735,22 @@ int fuse_main_real(int argc, char *argv[],
     config.gid = getgid();
     config.inode_table = itable;
 
-    /* Create NFS server */
-    uint16_t port = 0;
-    darwinfuse_server_t *srv = nfs4_server_create(&config, &port);
-    if (!srv) {
-        DFUSE_ERR("Failed to create NFS server");
-        dfuse_itable_destroy(itable);
-        return -1;
-    }
-
-    g_server = srv;
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = signal_handler;
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
 
+    /* Create NFS server, start temporary server thread and mount */
+    uint16_t port = 0;
     pthread_t srv_thread;
-    if (pthread_create(&srv_thread, NULL,
-                       (void *(*)(void *))nfs4_server_run, srv) != 0) {
-        DFUSE_ERR("Failed to create server thread");
-        nfs4_server_destroy(srv);
+    darwinfuse_server_t *srv = create_and_mount(&config, args.mount_point, &args,
+                                                &srv_thread, &port);
+    if (!srv) {
         dfuse_itable_destroy(itable);
-        g_server = NULL;
         return -1;
     }
-
-    if (do_mount_nfs(port, args.mount_point, &args) < 0) {
-        DFUSE_ERR("Failed to mount NFS");
-        nfs4_server_stop(srv);
-        pthread_join(srv_thread, NULL);
-        nfs4_server_destroy(srv);
-        dfuse_itable_destroy(itable);
-        g_server = NULL;
-        return -1;
-    }
+    g_server = srv;
 
     if (args.foreground) {
         /* Foreground mode */
