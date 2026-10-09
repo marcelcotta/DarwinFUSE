@@ -70,6 +70,7 @@
 #define NFS4ERR_NOSPC           28
 #define NFS4ERR_ROFS            30
 #define NFS4ERR_NAMETOOLONG     63
+#define NFS4ERR_BADNAME         10041
 #define NFS4ERR_NOTEMPTY        66
 #define NFS4ERR_STALE           70
 #define NFS4ERR_BADHANDLE       10001

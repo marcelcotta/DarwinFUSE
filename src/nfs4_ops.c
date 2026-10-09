@@ -18,6 +18,7 @@
 
 #include <fuse.h>
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -108,6 +109,35 @@ static char *fh_to_path(const darwinfuse_config_t *config,
     dfuse_ino_t ino = fh_get_ino(fh, fh_len);
     if (ino == 0) return NULL;
     return dfuse_itable_path_dup(config->inode_table, ino);
+}
+
+/*
+ * Decode a component4 (file name) and validate it. Names are joined into
+ * FUSE paths, so "/" or NUL inside a name, or "." / ".." components, would
+ * let a client address paths outside the directory it names — a path
+ * traversal for pass-through filesystems (RFC 7530: NFS4ERR_BADNAME).
+ */
+static uint32_t decode_component(xdr_buf_t *req, char *out, size_t outsz)
+{
+    uint32_t len = xdr_decode_uint32(req);
+    if (req->error) return NFS4ERR_INVAL;
+
+    size_t padded = ((size_t)len + 3) & ~(size_t)3;
+    if (xdr_remaining(req) < padded) {
+        req->error = 1;
+        return NFS4ERR_INVAL;
+    }
+    const char *raw = (const char *)req->data + req->pos;
+    xdr_skip(req, padded);
+
+    if (len == 0) return NFS4ERR_INVAL;
+    if (len >= outsz) return NFS4ERR_NAMETOOLONG;
+    if (memchr(raw, '\0', len) || memchr(raw, '/', len)) return NFS4ERR_BADNAME;
+
+    memcpy(out, raw, len);
+    out[len] = '\0';
+    if (strcmp(out, ".") == 0 || strcmp(out, "..") == 0) return NFS4ERR_BADNAME;
+    return NFS4_OK;
 }
 
 /*
@@ -600,8 +630,8 @@ static uint32_t handle_lookup(const darwinfuse_config_t *config,
     dfuse_ino_type_t dir_type = dfuse_itable_type(config->inode_table, dir_ino);
 
     char name[256];
-    xdr_decode_string(req, name, sizeof(name));
-    if (req->error) return NFS4ERR_INVAL;
+    uint32_t name_status = decode_component(req, name, sizeof(name));
+    if (name_status != NFS4_OK) return name_status;
 
     if (dir_type == DFUSE_INO_ATTRDIR) {
         /* Lookup a named attribute within an attrdir */
@@ -1340,7 +1370,8 @@ static uint32_t handle_open(const darwinfuse_config_t *config,
 
     if (claim_type == CLAIM_NULL) {
         /* component name to open */
-        xdr_decode_string(req, filename, sizeof(filename));
+        uint32_t name_status = decode_component(req, filename, sizeof(filename));
+        if (name_status != NFS4_OK) return name_status;
 
         /* Check if current FH is an attrdir (opening a named attribute) */
         dfuse_ino_t cur_ino = fh_get_ino(ctx->current_fh, ctx->current_fh_len);
@@ -1681,6 +1712,10 @@ static uint32_t handle_read(const darwinfuse_config_t *config,
     uint32_t count  = xdr_decode_uint32(req);
     if (req->error) return NFS4ERR_INVAL;
 
+    /* FUSE takes a signed off_t: reject offsets that would turn negative */
+    if (offset > (uint64_t)INT64_MAX - count)
+        return NFS4ERR_INVAL;
+
     dfuse_ino_t cur_ino = fh_get_ino(ctx->current_fh, ctx->current_fh_len);
     if (cur_ino == 0) return NFS4ERR_BADHANDLE;
 
@@ -1803,6 +1838,10 @@ static uint32_t handle_write(const darwinfuse_config_t *config,
 
     uint8_t *data = req->data + req->pos;
     xdr_skip(req, padded);
+
+    /* FUSE takes a signed off_t: reject offsets that would turn negative */
+    if (offset > (uint64_t)INT64_MAX - data_len_raw)
+        return NFS4ERR_INVAL;
 
     dfuse_ino_t cur_ino = fh_get_ino(ctx->current_fh, ctx->current_fh_len);
     if (cur_ino == 0) return NFS4ERR_BADHANDLE;
@@ -1983,7 +2022,11 @@ static uint32_t handle_create(const darwinfuse_config_t *config,
 
     /* Decode: objname (component4) */
     char name[256];
-    xdr_decode_string(req, name, sizeof(name));
+    uint32_t name_status = decode_component(req, name, sizeof(name));
+    if (name_status != NFS4_OK) {
+        free(dir_path);
+        return name_status;
+    }
 
     /* Decode: createattrs (fattr4) */
     uint32_t cr_bitmap[2] = {0, 0};
@@ -2070,8 +2113,8 @@ static uint32_t handle_remove(const darwinfuse_config_t *config,
     dfuse_ino_type_t dir_type = dfuse_itable_type(config->inode_table, dir_ino);
 
     char name[256];
-    xdr_decode_string(req, name, sizeof(name));
-    if (req->error) return NFS4ERR_INVAL;
+    uint32_t name_status = decode_component(req, name, sizeof(name));
+    if (name_status != NFS4_OK) return name_status;
 
     if (dir_type == DFUSE_INO_ATTRDIR) {
         /* Remove a named attribute (xattr) */
@@ -2144,12 +2187,13 @@ static uint32_t handle_rename(const darwinfuse_config_t *config,
     }
 
     char old_name[256], new_name[256];
-    xdr_decode_string(req, old_name, sizeof(old_name));
-    xdr_decode_string(req, new_name, sizeof(new_name));
-    if (req->error) {
+    uint32_t name_status = decode_component(req, old_name, sizeof(old_name));
+    if (name_status == NFS4_OK)
+        name_status = decode_component(req, new_name, sizeof(new_name));
+    if (name_status != NFS4_OK) {
         free(src_dir);
         free(dst_dir);
-        return NFS4ERR_INVAL;
+        return name_status;
     }
 
     char old_path[1024], new_path[1024];
@@ -2195,11 +2239,11 @@ static uint32_t handle_link(const darwinfuse_config_t *config,
     }
 
     char new_name[256];
-    xdr_decode_string(req, new_name, sizeof(new_name));
-    if (req->error) {
+    uint32_t name_status = decode_component(req, new_name, sizeof(new_name));
+    if (name_status != NFS4_OK) {
         free(existing);
         free(dir_path);
-        return NFS4ERR_INVAL;
+        return name_status;
     }
 
     char new_path[1024];
