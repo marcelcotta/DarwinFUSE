@@ -80,9 +80,8 @@ the socket directory is private, and connections from other UIDs are rejected
 refused, so a client cannot address paths outside the directory it names.
 
 Earlier versions listened on a loopback TCP port, which any local process could
-connect to. If the local-socket mount fails, DarwinFUSE still falls back to that
-transport and prints a warning; build with `-DDFUSE_TCP_FALLBACK=0` to make this a
-hard error.
+connect to. A failed local-socket mount is an error; for diagnosis, a build with
+`-DDFUSE_TCP_FALLBACK=1` falls back to loopback TCP and prints a warning.
 
 ## macFUSE Compatibility
 

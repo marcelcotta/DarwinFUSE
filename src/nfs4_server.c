@@ -28,8 +28,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <limits.h>
 #ifdef __APPLE__
 #include <sys/ucred.h>
+#include <sys/param.h>
+#include <sys/mount.h>
 #endif
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -87,6 +90,7 @@ struct darwinfuse_server {
     int                 wakeup_pipe[2]; /* self-pipe for stop signal */
     volatile int        running;
     int                 had_client;     /* true once a client connected */
+    char                mount_point[PATH_MAX]; /* as in the mount table, "" if unknown */
 
     client_conn_t       clients[DFUSE_MAX_CLIENTS];
     int                 num_clients;
@@ -650,6 +654,41 @@ fail:
     return NULL;
 }
 
+void nfs4_server_set_mount_point(darwinfuse_server_t *srv, const char *path)
+{
+    if (!srv) return;
+    if (!path || snprintf(srv->mount_point, sizeof(srv->mount_point), "%s", path)
+                     >= (int)sizeof(srv->mount_point))
+        srv->mount_point[0] = '\0';
+}
+
+/*
+ * Whether the server's mount is still mounted. Reads the cached mount list
+ * (MNT_NOWAIT), which never sends a request to an NFS server, so this cannot
+ * block on ourselves. For the local socket the mount source ("<socket>:/")
+ * must match too, so a new mount on the same path is not taken for ours.
+ * Without a known mount point: "not mounted".
+ */
+static int mount_point_active(const darwinfuse_server_t *srv)
+{
+#ifdef __APPLE__
+    if (!srv->mount_point[0]) return 0;
+    struct statfs *mnts;
+    int n = getmntinfo(&mnts, MNT_NOWAIT);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(mnts[i].f_mntonname, srv->mount_point) != 0)
+            continue;
+        if (srv->listen_family == AF_UNIX && srv->socket_path[0] &&
+            !strstr(mnts[i].f_mntfromname, srv->socket_path))
+            continue;
+        return 1;
+    }
+#else
+    (void)srv;
+#endif
+    return 0;
+}
+
 int nfs4_server_run(darwinfuse_server_t *srv)
 {
     int result = 0;
@@ -788,23 +827,25 @@ int nfs4_server_run(darwinfuse_server_t *srv)
                 srv->num_clients--;
         }
 
-        /* Check if all clients disconnected (mount was unmounted) */
+        /*
+         * All clients gone after a client had connected: the file system has
+         * been unmounted. While the mount point is still in the mount table
+         * the kernel is only reconnecting or still tearing the mount down;
+         * the next poll timeout checks again.
+         */
         if (srv->had_client) {
+            int alive = 0;
             if (srv->multithreaded) {
-                int alive = 0;
                 for (int i = 0; i < srv->num_clients; i++) {
                     if (srv->clients[i].fd >= 0 || srv->clients[i].closing)
                         alive++;
                 }
-                if (alive == 0) {
-                    DFUSE_LOG("All clients disconnected — exiting event loop");
-                    break;
-                }
             } else {
-                if (srv->num_clients == 0) {
-                    DFUSE_LOG("All clients disconnected — exiting event loop");
-                    break;
-                }
+                alive = srv->num_clients;
+            }
+            if (alive == 0 && !mount_point_active(srv)) {
+                DFUSE_LOG("All clients disconnected — exiting event loop");
+                break;
             }
         }
     }
@@ -838,9 +879,14 @@ void nfs4_server_restart(darwinfuse_server_t *srv)
 {
     if (!srv) return;
 
-    /* Re-arm the running flag so nfs4_server_run() works again */
+    /*
+     * Re-arm the running flag so nfs4_server_run() works again. had_client
+     * stays as it is: after the daemon fork() (or in foreground mode after
+     * the mount) the kernel keeps using the connection accepted during
+     * mount and never connects again, so resetting it kept the server
+     * running forever after the unmount.
+     */
     srv->running = 1;
-    srv->had_client = 0;
 
     /* Drain the wakeup pipe (may have leftover data from stop) */
     char buf[16];

@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <limits.h>
 #include <sys/wait.h>
 
 /* ---- Thread-local FUSE context ---- */
@@ -232,12 +233,12 @@ static int parse_args(int argc, char *argv[], parsed_args_t *out)
  * callbacks (no delegations), and without them the kernel does not open its
  * NFSv4 callback listener.
  *
- * DFUSE_TCP_FALLBACK=1 retries over loopback TCP if the local-socket mount
- * fails. Set it to 0 to fail closed once the local transport has been
- * verified on all supported macOS versions.
+ * The local socket is verified on macOS, so a failed local mount is an error
+ * (fail closed). Building with -DDFUSE_TCP_FALLBACK=1 restores the retry over
+ * loopback TCP for diagnosis; that transport is reachable by every local user.
  */
 #ifndef DFUSE_TCP_FALLBACK
-#define DFUSE_TCP_FALLBACK 1
+#define DFUSE_TCP_FALLBACK 0
 #endif
 
 static int do_mount_nfs(uint16_t port, const char *socket_path,
@@ -357,6 +358,15 @@ static darwinfuse_server_t *create_and_mount(const darwinfuse_config_t *config,
                                              pthread_t *srv_thread,
                                              uint16_t *port)
 {
+    /*
+     * The mount table lists the resolved path (e.g. /private/tmp/... for
+     * /tmp/...). Resolve it now: once mounted, resolving it would query the
+     * server.
+     */
+    char mount_point_real[PATH_MAX];
+    if (!realpath(mount_point, mount_point_real))
+        snprintf(mount_point_real, sizeof(mount_point_real), "%s", mount_point);
+
     for (int attempt = 0; attempt < 2; attempt++) {
         const char *socket_path = NULL;
         darwinfuse_server_t *srv;
@@ -379,6 +389,7 @@ static darwinfuse_server_t *create_and_mount(const darwinfuse_config_t *config,
         if (!srv)
             continue;
 
+        nfs4_server_set_mount_point(srv, mount_point_real);
         if (pthread_create(srv_thread, NULL, server_thread_main, srv) != 0) {
             DFUSE_ERR("Failed to create server thread");
             nfs4_server_destroy(srv);

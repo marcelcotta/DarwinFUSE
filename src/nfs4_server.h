@@ -51,6 +51,13 @@ darwinfuse_server_t *nfs4_server_create_local(const darwinfuse_config_t *config,
                                                const char **socket_path);
 
 /*
+ * Record the mount point (resolved, as the mount table lists it). Once all
+ * clients have disconnected, nfs4_server_run() only returns when this path is
+ * no longer mounted, so a kernel reconnect does not end the server.
+ */
+void nfs4_server_set_mount_point(darwinfuse_server_t *srv, const char *path);
+
+/*
  * Run the NFS event loop. Blocks until the server is stopped
  * (via nfs4_server_stop or when all clients disconnect after mount).
  * Returns 0 on clean exit, -1 on error.
