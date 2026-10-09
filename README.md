@@ -63,7 +63,7 @@ When you call `fuse_main()`, DarwinFUSE:
 
 1. Starts a lightweight NFSv4 server on a Unix domain socket inside a private
    directory (mode 0700, `$TMPDIR/darwinfuse.XXXXXX/nfs.sock`)
-2. Calls `/sbin/mount_nfs -o proto=ticotsord,port=<socket>` to mount it at your
+2. Calls `/sbin/mount_nfs -o proto=ticotsord,port=<socket>,nocallback` to mount it at your
    chosen mount point
 3. Translates incoming NFS operations into your `fuse_operations` callbacks
 4. Optionally daemonizes and runs a multi-threaded worker pool

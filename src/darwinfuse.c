@@ -225,6 +225,13 @@ static int parse_args(int argc, char *argv[], parsed_args_t *out)
  * would be reachable by every local user and process, and the AUTH_SYS
  * credentials an NFS client sends are not authenticated.
  *
+ * "nocallback" is required for the local socket: with NFSv4 callbacks
+ * enabled, the kernel's SETCLIENTID needs an IPv4/IPv6 address of its own
+ * socket for the callback channel and fails with EINVAL on AF_LOCAL
+ * (nfs4_setclientid() in Apple's NFS client). The server never uses
+ * callbacks (no delegations), and without them the kernel does not open its
+ * NFSv4 callback listener.
+ *
  * DFUSE_TCP_FALLBACK=1 retries over loopback TCP if the local-socket mount
  * fails. Set it to 0 to fail closed once the local transport has been
  * verified on all supported macOS versions.
@@ -242,14 +249,14 @@ static int do_mount_nfs(uint16_t port, const char *socket_path,
 
     if (socket_path) {
         len = snprintf(opts, sizeof(opts),
-            "vers=4,proto=ticotsord,port=%s,noac,noacl,noresvport,"
+            "vers=4,proto=ticotsord,port=%s,nocallback,noac,noacl,noresvport,"
             "rsize=65536,wsize=65536,"
             "soft,intr,retrycnt=0",
             socket_path);
         snprintf(spec, sizeof(spec), "<%s>:/", socket_path);
     } else {
         len = snprintf(opts, sizeof(opts),
-            "vers=4,tcp,noac,noacl,noresvport,"
+            "vers=4,tcp,nocallback,noac,noacl,noresvport,"
             "rsize=65536,wsize=65536,"
             "soft,intr,retrycnt=0,"
             "port=%u",
