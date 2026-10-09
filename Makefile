@@ -28,7 +28,7 @@ DYLIB_CURRENT_VERSION ?= 12.9.0
 ARCHS ?= arm64 x86_64
 
 CFLAGS_BASE := -Wall -Wextra -Wno-unused-parameter -std=c11 \
-               -Iinclude -Isrc -D_FILE_OFFSET_BITS=64
+               -Iinclude -Isrc -D_FILE_OFFSET_BITS=64 -MMD -MP
 
 ifeq ($(DEBUG),1)
     CFLAGS_BASE += -g -DDEBUG
@@ -183,3 +183,6 @@ pkg: $(STATIC_LIB) $(DYLIB)
 clean:
 	rm -rf build/
 	rm -f $(STATIC_LIB) $(DYLIB) $(DYLIB_LINK) $(EXAMPLES)
+
+# Header dependencies written by -MMD
+-include $(wildcard build/*/src/*.d)
