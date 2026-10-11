@@ -500,6 +500,22 @@ void fuse_unmount(const char *mountpoint, struct fuse_chan *ch)
     }
 }
 
+/*
+ * The caller's operations table was compiled against some version of the headers;
+ * op_size says how much of it exists. Work on a zero-filled copy of that part, so a
+ * table from an older, shorter header is never read beyond its end (libfuse does
+ * the same).
+ */
+static struct fuse_operations *copy_ops(const struct fuse_operations *op, size_t op_size)
+{
+    struct fuse_operations *copy = calloc(1, sizeof(*copy));
+    if (!copy) return NULL;
+    if (op_size == 0 || op_size > sizeof(*copy))
+        op_size = sizeof(*copy);
+    memcpy(copy, op, op_size);
+    return copy;
+}
+
 struct fuse *fuse_new(struct fuse_chan *ch, struct fuse_args *args,
                       const struct fuse_operations *op, size_t op_size,
                       void *user_data)
@@ -511,14 +527,17 @@ struct fuse *fuse_new(struct fuse_chan *ch, struct fuse_args *args,
     struct fuse *f = calloc(1, sizeof(*f));
     if (!f) return NULL;
 
+    struct fuse_operations *ops_copy = copy_ops(op, op_size);
+    if (!ops_copy) { free(f); return NULL; }
+
     f->chan = ch;
-    f->ops = op;
+    f->ops = ops_copy;
     f->ops_size = op_size;
     f->user_data = user_data;
     f->session.fuse = f;
 
     /* Attach real ops to the server */
-    nfs4_server_set_ops(ch->server, op, user_data);
+    nfs4_server_set_ops(ch->server, ops_copy, user_data);
 
     /* Set private_data to user_data (init() may override later) */
     darwinfuse_set_private_data(user_data);
@@ -546,6 +565,7 @@ void fuse_destroy(struct fuse *f)
         free(f->chan);
     }
 
+    free((void *)f->ops);
     free(f);
 }
 
@@ -716,7 +736,12 @@ int fuse_daemonize(int foreground)
 
 int fuse_version(void)
 {
-    return 26;
+    return FUSE_VERSION;
+}
+
+int fuse_chan_fd(struct fuse_chan *ch)
+{
+    return (ch && ch->server) ? nfs4_server_listen_fd(ch->server) : -1;
 }
 
 int fuse_exited(struct fuse *f)
@@ -828,9 +853,11 @@ int fuse_main_real(int argc, char *argv[],
                    const struct fuse_operations *op, size_t op_size,
                    void *user_data)
 {
-    (void)op_size;
-
     if (!op) return -1;
+
+    struct fuse_operations *ops_copy = copy_ops(op, op_size);
+    if (!ops_copy) return -1;
+    op = ops_copy;
 
     /* Parse arguments */
     parsed_args_t args;

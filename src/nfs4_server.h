@@ -70,6 +70,11 @@ int nfs4_server_run(darwinfuse_server_t *srv);
 void nfs4_server_stop(darwinfuse_server_t *srv);
 
 /*
+ * The server's listening socket (-1 if there is none).
+ */
+int nfs4_server_listen_fd(const darwinfuse_server_t *srv);
+
+/*
  * Re-arm the server after stop so nfs4_server_run() can be called again.
  * Used after fork() to restart the event loop in the child process.
  */

@@ -112,6 +112,15 @@ static void set_nonblocking(int fd)
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+/* Programs such as sshfs start child processes; those must not inherit the
+ * server's sockets, or the NFS connection stays open after the server is gone. */
+static void set_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags >= 0)
+        fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
 static void set_tcp_nodelay(int fd)
 {
     int flag = 1;
@@ -311,6 +320,12 @@ static int process_rpc_message(darwinfuse_server_t *srv, client_conn_t *c,
         rpc_encode_reply_accepted(&rep, rpc_hdr.xid);
     } else if (rpc_hdr.procedure == NFSPROC4_COMPOUND) {
         darwinfuse_set_context(rpc_hdr.cred_uid, rpc_hdr.cred_gid);
+        /* The request may run in the server thread itself or in a worker; either
+         * way fuse_get_context()->private_data must be the program's (encfs
+         * reads its state from it). */
+        /* Until init() has returned its own pointer, the program's user_data. */
+        darwinfuse_set_private_data(srv->private_data ? srv->private_data
+                                                       : srv->config.user_data);
         rpc_encode_reply_accepted(&rep, rpc_hdr.xid);
 
         nfs4_request_ctx_t ctx;
@@ -511,7 +526,9 @@ darwinfuse_server_t *nfs4_server_create(const darwinfuse_config_t *config,
         return NULL;
     }
     set_nonblocking(srv->wakeup_pipe[0]);
+    set_cloexec(srv->wakeup_pipe[0]);
     set_nonblocking(srv->wakeup_pipe[1]);
+    set_cloexec(srv->wakeup_pipe[1]);
 
     /* Create TCP listen socket */
     srv->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -548,6 +565,7 @@ darwinfuse_server_t *nfs4_server_create(const darwinfuse_config_t *config,
     *port = ntohs(addr.sin_port);
 
     set_nonblocking(srv->listen_fd);
+    set_cloexec(srv->listen_fd);
     srv->running = 1;
 
     DFUSE_LOG("NFS server listening on 127.0.0.1:%u", *port);
@@ -589,7 +607,9 @@ darwinfuse_server_t *nfs4_server_create_local(const darwinfuse_config_t *config,
         return NULL;
     }
     set_nonblocking(srv->wakeup_pipe[0]);
+    set_cloexec(srv->wakeup_pipe[0]);
     set_nonblocking(srv->wakeup_pipe[1]);
+    set_cloexec(srv->wakeup_pipe[1]);
 
     /* Private directory: mkdtemp creates it atomically with mode 0700 */
     const char *base = local_socket_base();
@@ -638,6 +658,7 @@ darwinfuse_server_t *nfs4_server_create_local(const darwinfuse_config_t *config,
 
     set_local_bufsizes(srv->listen_fd);
     set_nonblocking(srv->listen_fd);
+    set_cloexec(srv->listen_fd);
     srv->running = 1;
 
     *socket_path = srv->socket_path;
@@ -774,6 +795,7 @@ int nfs4_server_run(darwinfuse_server_t *srv)
                     close(cfd);
                 } else {
                     set_nonblocking(cfd);
+                    set_cloexec(cfd);
                     if (srv->listen_family == AF_UNIX)
                         set_local_bufsizes(cfd);
                     else
@@ -1005,4 +1027,9 @@ void nfs4_server_set_private_data(darwinfuse_server_t *srv, void *private_data)
 {
     if (!srv) return;
     srv->private_data = private_data;
+}
+
+int nfs4_server_listen_fd(const darwinfuse_server_t *srv)
+{
+    return srv ? srv->listen_fd : -1;
 }
