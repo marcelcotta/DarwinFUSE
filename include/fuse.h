@@ -1,8 +1,9 @@
 /*
  * DarwinFUSE — libfuse-compatible public API
  *
- * Drop-in replacement for macFUSE / OSXFUSE / libfuse on macOS.
- * Compatible with FUSE API version 26; includes macFUSE extensions.
+ * Replaces macFUSE / OSXFUSE for programs that use the high-level libfuse 2.x API.
+ * Implements libfuse 2.9 (API version 2.6 unless the program chooses another)
+ * with the macFUSE extensions that filesystems commonly use.
  *
  * Copyright (c) 2026 Marcel Cotta. All rights reserved.
  * Licensed under the MIT License.

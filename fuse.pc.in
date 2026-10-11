@@ -3,7 +3,7 @@ libdir=${prefix}/lib
 includedir=${prefix}/include
 
 Name: fuse
-Description: DarwinFUSE — drop-in replacement for macFUSE (no kext, no SIP)
+Description: DarwinFUSE — FUSE for macOS without a kernel extension (replaces macFUSE for the high-level libfuse 2.x API)
 URL: https://github.com/marcelcotta/DarwinFUSE
 Version: 2.9.9
 Cflags: -I${includedir}/fuse -D_FILE_OFFSET_BITS=64

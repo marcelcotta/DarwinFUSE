@@ -3,8 +3,8 @@ libdir=${prefix}/lib
 includedir=${prefix}/include
 
 Name: darwinfuse
-Description: Userspace NFSv4-based FUSE replacement for macOS (drop-in for macFUSE)
-URL: https://github.com/basalt-project/DarwinFUSE
+Description: Userspace NFSv4-based FUSE for macOS (replaces macFUSE for the high-level libfuse 2.x API)
+URL: https://github.com/marcelcotta/DarwinFUSE
 Version: @VERSION@
 Cflags: -I${includedir}
 Libs: -L${libdir} -ldarwinfuse

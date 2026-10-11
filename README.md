@@ -199,7 +199,7 @@ the installer package and run on a Mac:
 | **sshfs** | 2.10 (the last for libfuse 2; sshfs 3.x needs libfuse 3) | Mounted over a local `sftp-server`: create, read, rename, symlink, chmod, truncate, times, unicode names, 32 MB, a 1000-entry directory, unmount | 18 of 18 |
 | **encfs** | 1.9.5 (one C++ fix for current compilers) | Create, rename, symlink, chmod, truncate, times, 24 MB, a source tree, 300 files; encrypted names on disk; unmount and remount | 27 of 27 |
 | **ntfs-3g** | 2022.10.3 (`ntfs-3g`; the low-level `lowntfs-3g` is not supported) | Real NTFS image from `mkntfs`: the same operations, 24 MB, a source tree, 300 files; `ntfsfix` finds no problem afterwards | 20 of 20 |
-| **Basalt** | 1.2 (own copy of DarwinFUSE) | Encrypted volumes | Fully working |
+| **Basalt** | 1.2 (own copy of DarwinFUSE) | Encrypted volumes | Works |
 
 Not tested: Intel Macs and macOS 12 to 14 for these three programs; programs that call the
 low-level API.
@@ -293,22 +293,23 @@ installer/
 
 ## Replacing macFUSE
 
-DarwinFUSE is designed as a complete macFUSE replacement. To switch:
+DarwinFUSE can take the place of macFUSE for programs that use the high-level
+libfuse 2.x API. To switch:
 
 1. Uninstall macFUSE using its built-in uninstaller (System Settings > macFUSE > Remove)
 2. Optionally re-enable SIP (Recovery Mode > Startup Security Utility > Full Security)
 3. Install DarwinFUSE via the `.pkg` installer or `sudo make install`
 
-Existing Homebrew-installed FUSE programs will work without reinstallation because
-DarwinFUSE installs `libfuse.2.dylib` with the same install_name and library version
-numbers as macFUSE.
+Programs built against macFUSE that stay within that API keep working without a
+rebuild, because DarwinFUSE installs `libfuse.2.dylib` with the same install_name and
+library version numbers as macFUSE (see [Tested With](#tested-with)).
 
 ## Origins
 
 DarwinFUSE was created for [Basalt](https://github.com/marcelcotta/Basalt),
 a TrueCrypt-compatible encryption tool, to mount encrypted volumes on macOS
-without requiring macFUSE or kernel extensions. It has since grown into a
-general-purpose FUSE implementation suitable for any libfuse 2.x client.
+without requiring macFUSE or kernel extensions. It has since been extended so that
+programs using the high-level libfuse 2.x API, such as sshfs, encfs and ntfs-3g, run on it.
 
 ## License
 

@@ -2,7 +2,7 @@
 #
 # DarwinFUSE — Command-line installer
 #
-# Installs DarwinFUSE as a drop-in replacement for macFUSE.
+# Installs DarwinFUSE in place of macFUSE.
 # Must be run as root (sudo).
 #
 # Copyright (c) 2026 Marcel Cotta. All rights reserved.
