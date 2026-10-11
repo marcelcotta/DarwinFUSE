@@ -176,6 +176,11 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
     echo "Notarizing (this can take a few minutes)..."
     NOTARY_OUT="$(xcrun notarytool submit "$PKG" --keychain-profile "$NOTARY_PROFILE" \
         --wait --output-format json)" || true
+    if [[ -z "$NOTARY_OUT" ]]; then
+        echo "Error: notarytool returned nothing (network problem?)." >&2
+        echo "       The submission may still be running: xcrun notarytool history --keychain-profile $NOTARY_PROFILE" >&2
+        exit 1
+    fi
     NOTARY_STATUS="$(printf '%s' "$NOTARY_OUT" | plutil -extract status raw -o - - 2>/dev/null || true)"
     NOTARY_ID="$(printf '%s' "$NOTARY_OUT" | plutil -extract id raw -o - - 2>/dev/null || true)"
     if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
