@@ -1,6 +1,7 @@
 #!/bin/bash
 # sshfs 2.10 (built from the unmodified source) over DarwinFUSE, via a local sftp-server.
 set -u
+DARWINFUSE="$(cd "$(dirname "$0")/../.." && pwd)"
 S="$1"; W="$(mktemp -d "${TMPDIR:-/tmp}/dfuse-sshfs.XXXXXX")"; W="$(cd "$W" && pwd -P)"
 MNT="$W/mnt"; BACK="$W/back"; mkdir -p "$MNT" "$BACK"
 pass=0; fail=0
@@ -14,7 +15,7 @@ trap cleanup EXIT
 export DYLD_LIBRARY_PATH="$S/dfuse/lib"
 echo "--- library the binary loads"; otool -L "$S/build/sshfs/sshfs" | sed -n 2p | awk '{print "  "$1}'
 echo "--- mount (options: -p 2222 -C, ssh_command, reconnect)"
-"$S/build/sshfs/sshfs" -f -p 2222 -C -o "ssh_command=$S/scripts/fakessh" -o reconnect "localhost:$BACK" "$MNT" >"$W/sshfs.log" 2>&1 &
+"$S/build/sshfs/sshfs" -f -p 2222 -C -o "ssh_command=$DARWINFUSE/tests/programs/fakessh" -o reconnect "localhost:$BACK" "$MNT" >"$W/sshfs.log" 2>&1 &
 PID=$!
 for _ in $(seq 1 40); do mount | grep -q " on ${MNT} " && break; sleep 0.5; done
 mount | grep -q " on ${MNT} " || { bad "mount appeared"; head -20 "$W/sshfs.log"; exit 1; }
