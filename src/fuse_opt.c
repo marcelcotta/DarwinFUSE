@@ -98,10 +98,27 @@ int fuse_opt_add_opt(char **opts, const char *opt)
     return 0;
 }
 
+/* Like fuse_opt_add_opt, but a ',' or '\' inside the option is escaped with '\'. */
 int fuse_opt_add_opt_escaped(char **opts, const char *opt)
 {
-    /* For now, same as add_opt — full escaping would handle commas */
-    return fuse_opt_add_opt(opts, opt);
+    if (!opts || !opt) return -1;
+
+    size_t extra = 0;
+    for (const char *p = opt; *p; p++)
+        if (*p == ',' || *p == '\\') extra++;
+
+    char *escaped = malloc(strlen(opt) + extra + 1);
+    if (!escaped) return -1;
+    char *q = escaped;
+    for (const char *p = opt; *p; p++) {
+        if (*p == ',' || *p == '\\') *q++ = '\\';
+        *q++ = *p;
+    }
+    *q = '\0';
+
+    int rc = fuse_opt_add_opt(opts, escaped);
+    free(escaped);
+    return rc;
 }
 
 /* ---- Pattern matching ---- */
@@ -158,6 +175,18 @@ static int match_template(const char *templ, const char *arg,
         return 0;
     }
 
+    /* "-x " style: the option letter(s), then a value, attached or as the next
+     * argument. The value is whatever follows the template without its space. */
+    size_t tlen = strlen(templ);
+    if (tlen > 1 && templ[tlen - 1] == ' ') {
+        size_t prefix_len = tlen - 1;
+        if (strncmp(templ, arg, prefix_len) == 0) {
+            if (val_out) *val_out = arg + prefix_len;
+            return 1;
+        }
+        return 0;
+    }
+
     /* Exact match */
     if (strcmp(templ, arg) == 0) {
         if (val_out) *val_out = NULL;
@@ -180,28 +209,47 @@ int fuse_opt_match(const struct fuse_opt opts[], const char *opt)
 /* ---- Main parser ---- */
 
 /*
+ * An entry whose offset is -1U is a key entry. Earlier DarwinFUSE headers used
+ * the full-width value, which is accepted as well.
+ */
+static int is_key_entry(const struct fuse_opt *opt)
+{
+    return opt->offset == (unsigned long)(unsigned int)-1 ||
+           opt->offset == (unsigned long)-1;
+}
+
+/*
+ * Decide what happens to an argument for a given key, as libfuse does: DISCARD
+ * and KEEP are settled without calling the function. Returns -1 on error, 0 to
+ * drop the argument, 1 to keep it.
+ */
+static int call_proc(fuse_opt_proc_t proc, void *data, const char *arg,
+                     int key, struct fuse_args *outargs)
+{
+    if (key == FUSE_OPT_KEY_DISCARD) return 0;
+    if (key == FUSE_OPT_KEY_KEEP) return 1;
+    if (!proc) return 1;
+
+    int rc = proc(data, arg, key, outargs);
+    if (rc < 0) return -1;
+    return rc ? 1 : 0;
+}
+
+/*
  * Apply a matched option: set the value at the specified offset
  * in the data structure, or return the key for callback processing.
  */
 static int apply_opt(const struct fuse_opt *opt, void *data,
                      const char *val, const char *arg,
-                     int key, fuse_opt_proc_t proc,
-                     struct fuse_args *outargs)
+                     fuse_opt_proc_t proc, struct fuse_args *outargs)
 {
     if (!opt) {
         /* No matching template found — pass to callback as KEY_OPT */
-        if (proc)
-            return proc(data, arg, FUSE_OPT_KEY_OPT, outargs);
-        /* Default: keep the argument */
-        return 1;
+        return call_proc(proc, data, arg, FUSE_OPT_KEY_OPT, outargs);
     }
 
-    if (opt->offset == FUSE_OPT_KEY) {
-        /* Key processing: pass to callback */
-        if (proc)
-            return proc(data, arg, opt->value, outargs);
-        return 1;
-    }
+    if (is_key_entry(opt))
+        return call_proc(proc, data, arg, opt->value, outargs);
 
     /* Set value at offset */
     if (data) {
@@ -210,9 +258,14 @@ static int apply_opt(const struct fuse_opt *opt, void *data,
         if (perc) {
             char fmt = perc[1];
             switch (fmt) {
-            case 's':
-                *(const char **)dst = val ? val : arg;
+            case 's': {
+                /* The program keeps this pointer after the arguments are gone, so
+                 * give it its own copy (libfuse does; the caller may free it). */
+                char *copy = strdup(val ? val : arg);
+                if (!copy) return -1;
+                *(char **)dst = copy;
                 break;
+            }
             case 'd':
                 *(int *)dst = val ? atoi(val) : opt->value;
                 break;
@@ -238,6 +291,69 @@ static int apply_opt(const struct fuse_opt *opt, void *data,
     return 0;  /* consumed */
 }
 
+static const struct fuse_opt *find_opt(const struct fuse_opt opts[],
+                                       const char *arg, const char **val)
+{
+    if (!opts) return NULL;
+    for (int j = 0; opts[j].templ; j++)
+        if (match_template(opts[j].templ, arg, val))
+            return &opts[j];
+    return NULL;
+}
+
+/*
+ * Split "a,b\,c" at unescaped commas; "\x" stands for x. Calls fn for each
+ * option and stops at the first failure. Returns -1 on error.
+ */
+static int for_each_suboption(const char *list,
+                              int (*fn)(const char *tok, void *ctx), void *ctx)
+{
+    char *tok = malloc(strlen(list) + 1);
+    if (!tok) return -1;
+
+    int rc = 0;
+    const char *p = list;
+    while (rc == 0) {
+        size_t n = 0;
+        while (*p && *p != ',') {
+            if (*p == '\\' && p[1]) p++;
+            tok[n++] = *p++;
+        }
+        tok[n] = '\0';
+        if (n > 0)
+            rc = fn(tok, ctx);
+        if (!*p) break;
+        p++;                       /* skip the comma */
+    }
+
+    free(tok);
+    return rc;
+}
+
+struct parse_ctx {
+    void                  *data;
+    const struct fuse_opt *opts;
+    fuse_opt_proc_t        proc;
+    struct fuse_args      *outargs;
+};
+
+static int handle_suboption(const char *tok, void *vctx)
+{
+    struct parse_ctx *c = vctx;
+    const char *val = NULL;
+    const struct fuse_opt *matched = find_opt(c->opts, tok, &val);
+
+    int rc = apply_opt(matched, c->data, val, tok, c->proc, c->outargs);
+    if (rc < 0) return -1;
+    if (rc == 1) {
+        /* Keep: pass it on as -o <option> */
+        if (fuse_opt_add_arg(c->outargs, "-o") < 0 ||
+            fuse_opt_add_arg(c->outargs, tok) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 int fuse_opt_parse(struct fuse_args *args, void *data,
                    const struct fuse_opt opts[],
                    fuse_opt_proc_t proc)
@@ -246,6 +362,7 @@ int fuse_opt_parse(struct fuse_args *args, void *data,
         return 0;
 
     struct fuse_args outargs = FUSE_ARGS_INIT(0, NULL);
+    struct parse_ctx ctx = { data, opts, proc, &outargs };
 
     /* Always keep argv[0] (program name) */
     if (args->argc > 0)
@@ -255,90 +372,71 @@ int fuse_opt_parse(struct fuse_args *args, void *data,
         const char *arg = args->argv[i];
         int keep = 0;
 
-        if (strcmp(arg, "-o") == 0 && i + 1 < args->argc) {
-            /* -o option: parse comma-separated sub-options */
-            i++;
-            const char *optstr = args->argv[i];
-            char buf[2048];
-            strncpy(buf, optstr, sizeof(buf) - 1);
-            buf[sizeof(buf) - 1] = '\0';
+        /* "-o a,b" and "-oa,b" both carry a comma-separated option list */
+        const char *optlist = NULL;
+        if (strcmp(arg, "-o") == 0 && i + 1 < args->argc)
+            optlist = args->argv[++i];
+        else if (strncmp(arg, "-o", 2) == 0 && arg[2] != '\0')
+            optlist = arg + 2;
 
-            char *saveptr = NULL;
-            for (char *tok = strtok_r(buf, ",", &saveptr);
-                 tok != NULL;
-                 tok = strtok_r(NULL, ",", &saveptr))
-            {
-                const char *val = NULL;
-                const struct fuse_opt *matched = NULL;
+        if (optlist) {
+            if (for_each_suboption(optlist, handle_suboption, &ctx) < 0) {
+                fuse_opt_free_args(&outargs);
+                return -1;
+            }
+            continue;
+        }
 
-                if (opts) {
-                    for (int j = 0; opts[j].templ; j++) {
-                        if (match_template(opts[j].templ, tok, &val)) {
-                            matched = &opts[j];
-                            break;
-                        }
-                    }
+        if (arg[0] == '-') {
+            /* Flag argument */
+            const char *val = NULL;
+            const struct fuse_opt *matched = find_opt(opts, arg, &val);
+            char *joined = NULL;
+
+            /* "-p " takes its value as the next argument; the function sees the
+             * two joined ("-p2222"), as with libfuse. */
+            if (matched) {
+                size_t tlen = strlen(matched->templ);
+                if (tlen > 1 && matched->templ[tlen - 1] == ' ' &&
+                    strchr(matched->templ, '%') == NULL &&
+                    strlen(arg) == tlen - 1 && i + 1 < args->argc) {
+                    const char *next = args->argv[++i];
+                    joined = malloc(strlen(arg) + strlen(next) + 1);
+                    if (!joined) { fuse_opt_free_args(&outargs); return -1; }
+                    strcpy(joined, arg);
+                    strcat(joined, next);
+                    arg = joined;
+                    val = next;
+                } else if (strchr(matched->templ, '%') && strchr(matched->templ, ' ') &&
+                           i + 1 < args->argc) {
+                    val = args->argv[++i];
                 }
+            }
 
-                int rc = apply_opt(matched, data, val, tok,
-                                   matched ? matched->value : FUSE_OPT_KEY_OPT,
-                                   proc, &outargs);
-                if (rc < 0) {
+            int rc = apply_opt(matched, data, val, arg, proc, &outargs);
+            if (rc < 0) {
+                free(joined);
+                fuse_opt_free_args(&outargs);
+                return -1;
+            }
+            if (rc == 1) {
+                if (fuse_opt_add_arg(&outargs, arg) < 0) {
+                    free(joined);
                     fuse_opt_free_args(&outargs);
                     return -1;
                 }
-                if (rc == 1) {
-                    /* Keep: add as -o tok */
-                    fuse_opt_add_arg(&outargs, "-o");
-                    fuse_opt_add_arg(&outargs, tok);
-                }
             }
-        } else if (arg[0] == '-') {
-            /* Flag argument */
-            const char *val = NULL;
-            const struct fuse_opt *matched = NULL;
-
-            if (opts) {
-                for (int j = 0; opts[j].templ; j++) {
-                    if (match_template(opts[j].templ, arg, &val)) {
-                        matched = &opts[j];
-                        break;
-                    }
-                }
-            }
-
-            /* Check if this flag takes a next-arg value */
-            if (matched && strchr(matched->templ, ' ') && i + 1 < args->argc) {
-                i++;
-                val = args->argv[i];
-            }
-
-            int rc = apply_opt(matched, data, val, arg,
-                               matched ? matched->value : FUSE_OPT_KEY_OPT,
-                               proc, &outargs);
-            if (rc < 0) {
-                fuse_opt_free_args(&outargs);
-                return -1;
-            }
-            if (rc == 1) {
-                keep = 1;
-            }
-        } else {
-            /* Non-option argument */
-            int rc;
-            if (proc) {
-                rc = proc(data, arg, FUSE_OPT_KEY_NONOPT, &outargs);
-            } else {
-                rc = 1;  /* keep by default */
-            }
-            if (rc < 0) {
-                fuse_opt_free_args(&outargs);
-                return -1;
-            }
-            if (rc == 1) {
-                keep = 1;
-            }
+            free(joined);
+            continue;
         }
+
+        /* Non-option argument */
+        int rc = call_proc(proc, data, arg, FUSE_OPT_KEY_NONOPT, &outargs);
+        if (rc < 0) {
+            fuse_opt_free_args(&outargs);
+            return -1;
+        }
+        if (rc == 1) keep = 1;
 
         if (keep)
             fuse_opt_add_arg(&outargs, arg);
