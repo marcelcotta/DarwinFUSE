@@ -1067,6 +1067,26 @@ static uint32_t handle_setattr(const darwinfuse_config_t *config,
             if (has_atime) attrsset[1] |= (1u << (FATTR4_TIME_ACCESS_SET - 32));
             if (has_mtime) attrsset[1] |= (1u << (FATTR4_TIME_MODIFY_SET - 32));
         }
+    } else if ((has_atime || has_mtime) && config->ops->utime) {
+        /*
+         * A filesystem with only the old utime() callback (sshfs 2.x): fill in
+         * the time that was not set from the file's current attributes, as
+         * libfuse does.
+         */
+        struct stat cur;
+        memset(&cur, 0, sizeof(cur));
+        if ((!has_atime || !has_mtime) && config->ops->getattr)
+            config->ops->getattr(path, &cur);
+
+        struct utimbuf ub;
+        ub.actime  = has_atime ? set_atime.tv_sec : cur.st_atime;
+        ub.modtime = has_mtime ? set_mtime.tv_sec : cur.st_mtime;
+
+        int rc = config->ops->utime(path, &ub);
+        if (rc == 0) {
+            if (has_atime) attrsset[1] |= (1u << (FATTR4_TIME_ACCESS_SET - 32));
+            if (has_mtime) attrsset[1] |= (1u << (FATTR4_TIME_MODIFY_SET - 32));
+        }
     }
 
 #ifdef __APPLE__
@@ -1101,14 +1121,22 @@ static uint32_t handle_access(const darwinfuse_config_t *config,
     uint32_t granted = requested;  /* default: grant everything */
 
     if (config->ops->access) {
-        int mask = 0;
-        if (requested & ACCESS4_READ)    mask |= R_OK;
-        if (requested & ACCESS4_MODIFY)  mask |= W_OK;
-        if (requested & ACCESS4_EXECUTE) mask |= X_OK;
+        /*
+         * The client asks for several rights at once. Check read, write and
+         * execute one by one: a filesystem that refuses X_OK for a plain file
+         * (sshfs does) must not take read and write away with it.
+         */
+        const uint32_t read_bits  = ACCESS4_READ;
+        const uint32_t write_bits = ACCESS4_MODIFY | ACCESS4_EXTEND | ACCESS4_DELETE;
+        const uint32_t exec_bits  = ACCESS4_LOOKUP | ACCESS4_EXECUTE;
 
-        int rc = config->ops->access(path, mask);
-        if (rc != 0)
-            granted = 0;
+        granted = 0;
+        if ((requested & read_bits) && config->ops->access(path, R_OK) == 0)
+            granted |= requested & read_bits;
+        if ((requested & write_bits) && config->ops->access(path, W_OK) == 0)
+            granted |= requested & write_bits;
+        if ((requested & exec_bits) && config->ops->access(path, X_OK) == 0)
+            granted |= requested & exec_bits;
     }
 
     free(path);
@@ -1154,6 +1182,17 @@ static int readdir_filler(void *buf, const char *name,
     e->cookie = (uint64_t)(col->count + 1);
     col->count++;
     return 0;
+}
+
+/* Handle passed to a filesystem's getdir() (declared opaque in fuse.h). */
+struct fuse_dirhandle {
+    readdir_collector_t *collector;
+};
+
+static int getdir_filler(fuse_dirh_t h, const char *name, int type, ino_t ino)
+{
+    (void)type; (void)ino;
+    return readdir_filler(h->collector, name, NULL, 0);
 }
 
 static uint32_t handle_readdir(const darwinfuse_config_t *config,
@@ -1283,14 +1322,20 @@ static uint32_t handle_readdir(const darwinfuse_config_t *config,
     struct fuse_file_info dir_fi;
     memset(&dir_fi, 0, sizeof(dir_fi));
 
-    if (config->ops->opendir)
-        config->ops->opendir(dir_path, &dir_fi);
+    if (config->ops->readdir) {
+        if (config->ops->opendir)
+            config->ops->opendir(dir_path, &dir_fi);
 
-    if (config->ops->readdir)
         config->ops->readdir(dir_path, &collector, readdir_filler, 0, &dir_fi);
 
-    if (config->ops->releasedir)
-        config->ops->releasedir(dir_path, &dir_fi);
+        if (config->ops->releasedir)
+            config->ops->releasedir(dir_path, &dir_fi);
+    } else if (config->ops->getdir) {
+        /* Old interface (sshfs 2.x lists directories this way): same entries,
+         * delivered through a different callback. */
+        struct fuse_dirhandle dh = { &collector };
+        config->ops->getdir(dir_path, &dh, getdir_filler);
+    }
 
     int eof = 1;
     int emitted = 0;
@@ -1492,7 +1537,10 @@ static uint32_t handle_open(const darwinfuse_config_t *config,
                 fi.flags = O_CREAT | O_RDWR;
 
             if (config->ops->create) {
-                int rc = config->ops->create(path_buf, create_mode, &fi);
+                /* The mode carries the file type as well, as libfuse passes it;
+                 * filesystems such as ntfs-3g decide on it. */
+                int rc = config->ops->create(path_buf,
+                                             S_IFREG | (create_mode & 07777), &fi);
                 if (rc == 0) {
                     /* Store the fuse_fh */
                     target_ino = dfuse_itable_get_or_create(config->inode_table, path_buf);
