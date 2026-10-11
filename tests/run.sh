@@ -11,6 +11,11 @@
 # To test an installed or packaged libfuse.2.dylib instead, name its directory:
 #   DARWINFUSE_DYLIB_DIR=/usr/local/lib tests/run.sh
 #
+# To compile the test filesystem against another set of headers, for instance the
+# original macFUSE/OSXFUSE ones, and run it on this library (this is what a program
+# built for macFUSE does when it meets DarwinFUSE):
+#   DARWINFUSE_REFERENCE_INCLUDE=/usr/local/include/osxfuse tests/run.sh
+#
 set -u
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 W="$(mktemp -d "${TMPDIR:-/tmp}/darwinfuse-test.XXXXXX")"
@@ -36,6 +41,18 @@ cleanup() {
 trap cleanup EXIT
 
 echo "--- build"
+INC="$ROOT_DIR/include"
+if [ -n "${DARWINFUSE_REFERENCE_INCLUDE:-}" ]; then
+    INC="$DARWINFUSE_REFERENCE_INCLUDE"
+    echo "  headers: $INC (not DarwinFUSE's)"
+    if [ -z "${DARWINFUSE_DYLIB_DIR:-}" ]; then
+        # such a program loads libfuse.2.dylib; use the one built here
+        make -C "$ROOT_DIR" -s >/dev/null || { echo "library build failed"; exit 1; }
+        mkdir -p "$W/lib"
+        cp "$ROOT_DIR/libdarwinfuse.2.dylib" "$W/lib/libfuse.2.dylib"
+        DARWINFUSE_DYLIB_DIR="$W/lib"
+    fi
+fi
 if [ -n "${DARWINFUSE_DYLIB_DIR:-}" ]; then
     LINK="$DARWINFUSE_DYLIB_DIR/libfuse.2.dylib"
     export DYLD_LIBRARY_PATH="$DARWINFUSE_DYLIB_DIR"
@@ -45,7 +62,7 @@ else
     LINK="$ROOT_DIR/libdarwinfuse.a"
 fi
 cc -arch "$(uname -m)" -Wall -D_FILE_OFFSET_BITS=64 -D_DARWIN_USE_64_BIT_INODE \
-   -I"$ROOT_DIR/include" -o "$W/passthrough" "$ROOT_DIR/tests/passthrough.c" \
+   -I"$INC" -o "$W/passthrough" "$ROOT_DIR/tests/passthrough.c" \
    "$LINK" || { echo "test build failed"; exit 1; }
 
 echo "--- mount"
@@ -85,7 +102,7 @@ dd if=/dev/urandom of="$W/src.bin" bs=1m count=64 2>/dev/null
 check "copy 64 MB in"          cp "$W/src.bin" "$MNT/big.bin"
 check "64 MB identical"        cmp "$W/src.bin" "$MNT/big.bin"
 check "random-offset write"    bash -c "dd if=/dev/urandom of='$MNT/big.bin' bs=4096 seek=777 count=3 conv=notrunc 2>/dev/null && cmp '$MNT/big.bin' '$BACK/big.bin'"
-check "copy a source tree"     cp -R "$ROOT_DIR/src" "$MNT/tree"
+check "copy a source tree"     cp -RX "$ROOT_DIR/src" "$MNT/tree"
 check "tree identical"         diff -r "$ROOT_DIR/src" "$MNT/tree"
 check "parallel readers"       bash -c "for i in 1 2 3 4; do (cat '$MNT/big.bin' | shasum >/dev/null) & done; wait"
 

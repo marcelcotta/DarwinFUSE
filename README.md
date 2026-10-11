@@ -96,6 +96,14 @@ extensions that filesystems commonly use. It installs as `libfuse.2.dylib` with 
 same install_name and version numbers as macFUSE, so compiled programs that stay within
 that API work unchanged. Programs that call the low-level API do not (see below).
 
+The structures that a program hands to the library (`fuse_operations`,
+`fuse_file_info`, `fuse_context`, `fuse_conn_info`, `fuse_args`, `fuse_opt`) have the
+same layout as in the macFUSE/OSXFUSE headers, so a program compiled against those
+headers runs on DarwinFUSE. `make test` checks this with
+`DARWINFUSE_REFERENCE_INCLUDE=/usr/local/include/osxfuse` (a test filesystem built
+from the original headers, run on this library). Filesystems that still use the old
+`getdir`, `utime` or `mknod`-less `create` interfaces are served as libfuse serves them.
+
 ### What gets installed
 
 | Path | Description |
@@ -112,9 +120,9 @@ that API work unchanged. Programs that call the low-level API do not (see below)
 
 | Category | Callbacks | Status |
 |----------|-----------|--------|
-| **File metadata** | `getattr`, `fgetattr`, `access`, `readlink`, `utimens`, `chmod`, `chown`, `truncate`, `ftruncate` | All implemented |
+| **File metadata** | `getattr`, `fgetattr`, `access`, `readlink`, `utimens` (or the old `utime`), `chmod`, `chown`, `truncate`, `ftruncate` | All implemented |
 | **File I/O** | `open`, `create`, `read`, `write`, `flush`, `release`, `fsync` | All implemented |
-| **Directories** | `mkdir`, `rmdir`, `opendir`, `readdir`, `releasedir`, `fsyncdir` | All implemented |
+| **Directories** | `mkdir`, `rmdir`, `opendir`, `readdir` (or the old `getdir`), `releasedir`, `fsyncdir` | All implemented |
 | **Namespace** | `unlink`, `rename`, `link`, `symlink`, `mknod` | All implemented |
 | **Extended attrs** | `setxattr`, `getxattr`, `listxattr`, `removexattr` | All implemented (Apple `position` param supported) |
 | **Filesystem** | `statfs`, `init`, `destroy` | All implemented |
@@ -137,7 +145,7 @@ that API work unchanged. Programs that call the low-level API do not (see below)
 | `fuse_parse_cmdline` | Implemented |
 | `fuse_daemonize` | Implemented |
 | `fuse_opt_parse` / `fuse_opt_add_arg` / `fuse_opt_free_args` / ... | All implemented |
-| `fuse_version` | Implemented (returns 26) |
+| `fuse_version` | Implemented (returns 29, as libfuse 2.9) |
 | `fuse_getgroups` / `fuse_interrupted` | Implemented |
 | `fuse_exited` / `fuse_is_lib_option` | Implemented |
 | `fuse_setup` / `fuse_teardown` | Implemented (deprecated in libfuse) |
@@ -178,17 +186,23 @@ declarations for compilation compatibility:
 - **`renamex`** — `RENAME_SWAP`/`RENAME_EXCL` (macFUSE-only)
 - **File locking** — `lock`/`flock` accept and acknowledge requests but don't enforce byte-range locks
 
-None of these are used by sshfs, encfs, or Basalt. ntfs-3g uses `ioctl` for
+None of these are used by sshfs 2.x, encfs or Basalt. ntfs-3g uses `ioctl` for
 volume-level operations that don't apply to the DarwinFUSE use case.
 
 ## Tested With
 
-| FUSE Client | Callbacks Used | Status |
-|-------------|---------------|--------|
-| **Basalt** (encryption volumes) | ~12 core ops | Fully working |
-| **sshfs** | ~26 ops + fuse_opt | API-complete |
-| **encfs** | ~31 ops + xattrs | API-complete |
-| **ntfs-3g** | ~33 ops + xtimes | API-complete (minus ioctl) |
+These programs were built from their original sources against the headers and library of
+the installer package and run on a Mac:
+
+| Program | Version | What ran | Result |
+|---------|---------|----------|--------|
+| **sshfs** | 2.10 (the last for libfuse 2; sshfs 3.x needs libfuse 3) | Mounted over a local `sftp-server`: create, read, rename, symlink, chmod, truncate, times, unicode names, 32 MB, a 1000-entry directory, unmount | 18 of 18 |
+| **encfs** | 1.9.5 (one C++ fix for current compilers) | Create, rename, symlink, chmod, truncate, times, 24 MB, a source tree, 300 files; encrypted names on disk; unmount and remount | 27 of 27 |
+| **ntfs-3g** | 2022.10.3 (`ntfs-3g`; the low-level `lowntfs-3g` is not supported) | Real NTFS image from `mkntfs`: the same operations, 24 MB, a source tree, 300 files; `ntfsfix` finds no problem afterwards | 20 of 20 |
+| **Basalt** | 1.2 (own copy of DarwinFUSE) | Encrypted volumes | Fully working |
+
+Not tested: Intel Macs and macOS 12 to 14 for these three programs; programs that call the
+low-level API.
 
 ## Quick Start
 
