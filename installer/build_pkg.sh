@@ -76,6 +76,8 @@ chmod 755 "$PREFIX/lib/libfuse.2.dylib"
 cp "$PROJECT_DIR/include/fuse.h"        "$PREFIX/include/fuse/fuse.h"
 cp "$PROJECT_DIR/include/fuse_opt.h"    "$PREFIX/include/fuse/fuse_opt.h"
 cp "$PROJECT_DIR/include/fuse_common.h" "$PREFIX/include/fuse/fuse_common.h"
+cp "$PROJECT_DIR/include/fuse_lowlevel.h" "$PREFIX/include/fuse/fuse_lowlevel.h"
+cp "$PROJECT_DIR/include/fuse_darwin.h"   "$PREFIX/include/fuse/fuse_darwin.h"
 chmod 644 "$PREFIX/include/fuse/"*
 
 # Headers — darwinfuse/ namespace

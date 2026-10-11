@@ -30,17 +30,20 @@ struct fuse_opt {
     int value;             /* value to set, or key value */
 };
 
-/* Special offset for key processing */
-#define FUSE_OPT_KEY  ((unsigned long)-1)
+/*
+ * Key entry: on a match the processing function is called with `key`. The offset
+ * -1U marks such an entry; compiled programs contain exactly this value.
+ */
+#define FUSE_OPT_KEY(templ, key) { templ, -1U, key }
 
 /* End-of-list sentinel */
 #define FUSE_OPT_END  { NULL, 0, 0 }
 
-/* Special key values passed to the processing function */
-#define FUSE_OPT_KEY_OPT      -1  /* unmatched option */
-#define FUSE_OPT_KEY_NONOPT   -2  /* non-option argument */
-#define FUSE_OPT_KEY_KEEP      1  /* keep argument in output */
-#define FUSE_OPT_KEY_DISCARD   0  /* discard argument */
+/* Special key values, as in libfuse and macFUSE */
+#define FUSE_OPT_KEY_OPT      -1  /* passed to the function: unmatched option */
+#define FUSE_OPT_KEY_NONOPT   -2  /* passed to the function: non-option argument */
+#define FUSE_OPT_KEY_KEEP     -3  /* as the key of an entry: keep the argument, call nothing */
+#define FUSE_OPT_KEY_DISCARD  -4  /* as the key of an entry: drop the argument, call nothing */
 
 /*
  * Processing function callback.

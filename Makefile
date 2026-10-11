@@ -151,6 +151,8 @@ install: $(STATIC_LIB) $(DYLIB)
 	install -m 644 include/fuse.h $(PREFIX)/include/fuse/fuse.h
 	install -m 644 include/fuse_opt.h $(PREFIX)/include/fuse/fuse_opt.h
 	install -m 644 include/fuse_common.h $(PREFIX)/include/fuse/fuse_common.h
+	install -m 644 include/fuse_lowlevel.h $(PREFIX)/include/fuse/fuse_lowlevel.h
+	install -m 644 include/fuse_darwin.h $(PREFIX)/include/fuse/fuse_darwin.h
 	# Headers — darwinfuse/ namespace
 	install -m 644 include/fuse.h $(PREFIX)/include/darwinfuse/fuse.h
 	install -m 644 include/fuse_opt.h $(PREFIX)/include/darwinfuse/fuse_opt.h

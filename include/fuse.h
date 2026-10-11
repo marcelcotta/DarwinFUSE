@@ -11,7 +11,16 @@
 #ifndef DARWINFUSE_FUSE_H
 #define DARWINFUSE_FUSE_H
 
+/* The program chooses the API version; without a choice, use 2.6. */
+#ifndef FUSE_USE_VERSION
 #define FUSE_USE_VERSION 26
+#endif
+
+/* Version of the library API this header describes (libfuse 2.9, as macFUSE) */
+#define FUSE_MAJOR_VERSION 2
+#define FUSE_MINOR_VERSION 9
+#define FUSE_MAKE_VERSION(maj, min)  ((maj) * 10 + (min))
+#define FUSE_VERSION FUSE_MAKE_VERSION(FUSE_MAJOR_VERSION, FUSE_MINOR_VERSION)
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -19,6 +28,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <fcntl.h>
+#include <time.h>
+#include <utime.h>
 
 #ifdef __APPLE__
 #include <sys/mount.h>   /* struct statfs (BSD) for statfs_x */
@@ -37,6 +48,11 @@ struct fuse_chan;
 struct fuse_session;
 struct fuse_pollhandle;
 struct fuse_bufvec;
+
+/* Deprecated getdir() interface (kept so that old programs still compile) */
+struct fuse_dirhandle;
+typedef struct fuse_dirhandle *fuse_dirh_t;
+typedef int (*fuse_dirfil_t)(fuse_dirh_t h, const char *name, int type, ino_t ino);
 
 /* ---- Data structures ---- */
 
@@ -66,11 +82,25 @@ struct fuse_conn_info {
     unsigned async_read;
     unsigned max_write;
     unsigned max_readahead;
+#ifdef __APPLE__
+    /* macFUSE's legacy switches; programs set `want` bits instead (FUSE_ENABLE_*).
+     * The field has to stay: it keeps capable/want at the offsets compiled
+     * macFUSE programs use. */
+    struct {
+        unsigned case_insensitive : 1;
+        unsigned setvolname       : 1;
+        unsigned xtimes           : 1;
+    } enable;
+#endif
     unsigned capable;
     unsigned want;
     unsigned max_background;
     unsigned congestion_threshold;
+#ifdef __APPLE__
+    unsigned reserved[22];
+#else
     unsigned reserved[23];
+#endif
 };
 
 struct fuse_context {
@@ -96,6 +126,14 @@ struct fuse_context {
 #define FUSE_CAP_SPLICE_READ     (1 << 9)   /* Linux-only, no-op on macOS */
 #define FUSE_CAP_FLOCK_LOCKS     (1 << 10)
 #define FUSE_CAP_IOCTL_DIR       (1 << 11)
+
+/* Flags passed to a filesystem's ioctl() callback (DarwinFUSE never calls it,
+ * but programs test these in their own ioctl code, so they must compile). */
+#define FUSE_IOCTL_COMPAT        (1 << 0)
+#define FUSE_IOCTL_UNRESTRICTED  (1 << 1)
+#define FUSE_IOCTL_RETRY         (1 << 2)
+#define FUSE_IOCTL_DIR           (1 << 4)
+#define FUSE_IOCTL_MAX_IOV       256
 
 #ifdef __APPLE__
 /* macFUSE-specific capability flags */
@@ -152,8 +190,8 @@ struct fuse_operations {
     /* --- libfuse 2.6 core --- */
     int (*getattr)    (const char *, struct stat *);
     int (*readlink)   (const char *, char *, size_t);
-    /* getdir — deprecated, was removed in FUSE 3.x */
-    void *_deprecated_getdir;
+    /* getdir — deprecated, never called by DarwinFUSE (use readdir) */
+    int (*getdir)     (const char *, fuse_dirh_t, fuse_dirfil_t);
     int (*mknod)      (const char *, mode_t, dev_t);
     int (*mkdir)      (const char *, mode_t);
     int (*unlink)     (const char *);
@@ -164,8 +202,8 @@ struct fuse_operations {
     int (*chmod)      (const char *, mode_t);
     int (*chown)      (const char *, uid_t, gid_t);
     int (*truncate)   (const char *, off_t);
-    /* utime — deprecated */
-    void *_deprecated_utime;
+    /* utime — deprecated, never called by DarwinFUSE (use utimens) */
+    int (*utime)      (const char *, struct utimbuf *);
     int (*open)       (const char *, struct fuse_file_info *);
     int (*read)       (const char *, char *, size_t, off_t,
                        struct fuse_file_info *);
@@ -343,7 +381,7 @@ int fuse_parse_cmdline(struct fuse_args *args, char **mountpoint,
 int fuse_daemonize(int foreground);
 
 /*
- * Return the FUSE library version number (26).
+ * Return the FUSE library version number (29 for libfuse 2.9).
  */
 int fuse_version(void);
 
