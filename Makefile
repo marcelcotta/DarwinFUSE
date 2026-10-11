@@ -9,6 +9,7 @@
 #   install    Install headers + libraries + macFUSE-compatible symlinks
 #   uninstall  Remove installed files
 #   pkg        Build macOS .pkg installer
+#   test       Mount a test filesystem through the library and exercise it
 #   clean      Remove build artifacts
 #
 
@@ -17,7 +18,10 @@ AR      ?= ar
 RANLIB  ?= ranlib
 LIPO    ?= lipo
 PREFIX  ?= /usr/local
-VERSION ?= 1.0.0
+VERSION ?= 1.1.0
+
+# Oldest macOS the library runs on (the installer checks the same)
+MIN_MACOS ?= 12.0
 
 # dylib versioning — match macFUSE's libfuse.2.dylib scheme so that
 # existing binaries compiled against macFUSE find us at the same path.
@@ -28,6 +32,7 @@ DYLIB_CURRENT_VERSION ?= 12.9.0
 ARCHS ?= arm64 x86_64
 
 CFLAGS_BASE := -Wall -Wextra -Wno-unused-parameter -std=c11 \
+               -mmacosx-version-min=$(MIN_MACOS) \
                -Iinclude -Isrc -D_FILE_OFFSET_BITS=64 -MMD -MP
 
 ifeq ($(DEBUG),1)
@@ -61,7 +66,7 @@ EXAMPLES := examples/hello
 
 # ---- Rules ----
 
-.PHONY: all static dylib examples install uninstall pkg clean
+.PHONY: all static dylib examples install uninstall pkg test clean
 
 all: $(STATIC_LIB) $(DYLIB)
 
@@ -103,7 +108,7 @@ $(foreach arch,$(ARCHS),$(eval $(call ARCH_STATIC,$(arch))))
 define ARCH_DYLIB
 build/$(1)/libdarwinfuse.2.dylib: $(call ARCH_PIC_OBJS,$(1))
 	@echo "  DYLIB $$@ ($(1))"
-	$$(CC) -dynamiclib -arch $(1) -o $$@ $$^ \
+	$$(CC) -dynamiclib -arch $(1) -mmacosx-version-min=$$(MIN_MACOS) -o $$@ $$^ \
 	    -install_name $$(PREFIX)/lib/libfuse.2.dylib \
 	    -compatibility_version $$(DYLIB_COMPAT_VERSION) \
 	    -current_version $$(DYLIB_CURRENT_VERSION)
@@ -174,6 +179,10 @@ uninstall:
 	@echo "DarwinFUSE removed."
 
 # ---- .pkg installer ----
+
+# Needs a real NFS mount: run it from a normal Terminal session.
+test: $(STATIC_LIB)
+	@tests/run.sh
 
 pkg: $(STATIC_LIB) $(DYLIB)
 	@installer/build_pkg.sh "$(VERSION)"

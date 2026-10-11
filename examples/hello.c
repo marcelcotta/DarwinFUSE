@@ -5,13 +5,9 @@
  * "Hello from DarwinFUSE!". No kernel extension required.
  *
  * Build:  make examples
- * Usage:  mkdir -p /tmp/hello && sudo ./hello /tmp/hello
+ * Usage:  mkdir -p /tmp/hello && ./hello /tmp/hello
  * Check:  cat /tmp/hello/volume.dmg
  * Unmount: umount /tmp/hello
- *
- * NOTE: DarwinFUSE currently uses a fixed virtual filesystem layout
- *       with two entries: "volume.dmg" and "control". A future version
- *       will support arbitrary file/directory trees.
  */
 
 #include <fuse.h>
