@@ -1,12 +1,13 @@
 <h1 align="center">DarwinFUSE</h1>
 <p align="center">
-  <strong>A complete FUSE implementation for macOS — no kernel extension, no SIP changes, no third-party dependencies.</strong>
+  <strong>FUSE for macOS without a kernel extension, SIP changes or third-party dependencies.</strong>
 </p>
 
-DarwinFUSE is a drop-in replacement for macFUSE that runs entirely in userspace.
-It translates FUSE callbacks into NFSv4 operations served over a private local
-socket, using macOS's built-in `mount_nfs` to mount the filesystem. The result:
-full FUSE compatibility without touching the kernel.
+DarwinFUSE replaces macFUSE for programs that use the high-level libfuse 2.x API.
+It runs entirely in userspace: it translates FUSE callbacks into NFSv4 operations
+served over a private local socket and uses macOS's built-in `mount_nfs` to mount
+the filesystem. The low-level API is not implemented (see
+[What's Not Implemented](#whats-not-implemented)).
 
 > **No kext. No System Extension. No SIP disable. No macFUSE installation.**
 >
@@ -20,10 +21,12 @@ full FUSE compatibility without touching the kernel.
 Download the latest `.pkg` from the [Releases](https://github.com/marcelcotta/DarwinFUSE/releases) page and open it.
 
 The installer checks for an existing macFUSE installation and will guide you through
-removal if needed. After installing DarwinFUSE, existing FUSE programs (sshfs, encfs,
-ntfs-3g, ...) work without recompilation.
+removal if needed. Programs built against macFUSE's high-level API (sshfs, encfs,
+ntfs-3g, ...) then work without recompilation.
 
 An uninstaller app is included at `/Applications/DarwinFUSE/Uninstall DarwinFUSE.app`.
+
+Version 1.1.0 replaces 1.0.0, which has been withdrawn; install it over an old copy.
 
 ### Build from source
 
@@ -31,7 +34,10 @@ An uninstaller app is included at `/Applications/DarwinFUSE/Uninstall DarwinFUSE
 make                        # builds libdarwinfuse.a + libdarwinfuse.2.dylib
 sudo make install           # installs to /usr/local with macFUSE-compatible symlinks
 make pkg                    # builds a .pkg installer into build/
+make test                   # mounts a test filesystem and exercises it
 ```
+
+`make test` needs a real NFS mount, so run it from a normal Terminal session.
 
 ### Command-line installer
 
@@ -85,9 +91,10 @@ connect to. A failed local-socket mount is an error; for diagnosis, a build with
 
 ## macFUSE Compatibility
 
-DarwinFUSE implements the full libfuse 2.9 API plus macFUSE's Apple-specific
-extensions. It installs as `libfuse.2.dylib` with the same install_name and
-version numbers as macFUSE, so existing compiled binaries work unchanged.
+DarwinFUSE implements the high-level libfuse 2.9 API plus the Apple-specific
+extensions that filesystems commonly use. It installs as `libfuse.2.dylib` with the
+same install_name and version numbers as macFUSE, so compiled programs that stay within
+that API work unchanged. Programs that call the low-level API do not (see below).
 
 ### What gets installed
 
@@ -132,6 +139,9 @@ version numbers as macFUSE, so existing compiled binaries work unchanged.
 | `fuse_opt_parse` / `fuse_opt_add_arg` / `fuse_opt_free_args` / ... | All implemented |
 | `fuse_version` | Implemented (returns 26) |
 | `fuse_getgroups` / `fuse_interrupted` | Implemented |
+| `fuse_exited` / `fuse_is_lib_option` | Implemented |
+| `fuse_setup` / `fuse_teardown` | Implemented (deprecated in libfuse) |
+| `fuse_invalidate_path` / `fuse_start_cleanup_thread` / `fuse_stop_cleanup_thread` / `fuse_clean_cache` | Accepted, nothing to do (no kernel cache, entries are not remembered) |
 
 ### Capability Flags
 
@@ -152,8 +162,14 @@ Including the `FUSE_ENABLE_XTIMES()` / `FUSE_ENABLE_SETVOLNAME()` / `FUSE_ENABLE
 
 ### What's Not Implemented
 
-These features have no NFSv4 equivalent and exist only as struct declarations
-for compilation compatibility:
+**Library functions.** The low-level API (`fuse_lowlevel_*`, `fuse_session_*`,
+`fuse_chan_*`, `fuse_reply_*`), the stacking API (`fuse_fs_*`,
+`fuse_register_module`), the manual event loop (`fuse_read_cmd`, `fuse_process_cmd`,
+`fuse_loop_mt_proc`), `fuse_notify_poll` and macFUSE's `*_np` helpers are not
+provided. A program that references them fails to load or stops when it calls them.
+
+**Callbacks.** These features have no NFSv4 equivalent and exist only as struct
+declarations for compilation compatibility:
 
 - **`ioctl`** — no mechanism to tunnel arbitrary ioctls over NFS
 - **`poll`** — NFS has no file-descriptor polling
@@ -179,7 +195,7 @@ volume-level operations that don't apply to the DarwinFUSE use case.
 ```sh
 make examples
 mkdir -p /tmp/hello
-sudo ./examples/hello /tmp/hello
+./examples/hello /tmp/hello
 cat /tmp/hello/volume.dmg    # "Hello from DarwinFUSE!"
 umount /tmp/hello
 ```

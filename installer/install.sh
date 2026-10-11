@@ -12,6 +12,7 @@
 set -euo pipefail
 
 PREFIX="/usr/local"
+VERSION="1.1.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -156,9 +157,9 @@ printf '#include "fuse/fuse.h"\n' > "$PREFIX/include/fuse.h"
 
 # pkg-config
 info "  Installing pkg-config files..."
-sed -e "s|@PREFIX@|$PREFIX|" -e "s|@VERSION@|1.0.0|" \
+sed -e "s|@PREFIX@|$PREFIX|" -e "s|@VERSION@|$VERSION|" \
     "$PROJECT_DIR/darwinfuse.pc.in" > "$PREFIX/lib/pkgconfig/darwinfuse.pc"
-sed -e "s|@PREFIX@|$PREFIX|" -e "s|@VERSION@|1.0.0|" \
+sed -e "s|@PREFIX@|$PREFIX|" -e "s|@VERSION@|$VERSION|" \
     "$PROJECT_DIR/fuse.pc.in" > "$PREFIX/lib/pkgconfig/fuse.pc"
 
 # ---- Create receipt marker ----
@@ -167,7 +168,7 @@ install -d "$PREFIX/share/darwinfuse"
 cat > "$PREFIX/share/darwinfuse/receipt.json" <<RECEIPT
 {
   "name": "DarwinFUSE",
-  "version": "1.0.0",
+  "version": "$VERSION",
   "installed": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "prefix": "$PREFIX"
 }

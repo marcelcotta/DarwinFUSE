@@ -7,13 +7,30 @@
 #
 # Usage: ./build_pkg.sh [version]
 #
+# Without the variables below the result is an unsigned installer for local use.
+# For a release, set them to sign the library and uninstaller (hardened runtime),
+# sign the .pkg, and have Apple notarize it (the ticket is stapled to the .pkg):
+#
+#   DARWINFUSE_APP_IDENTITY        "Developer ID Application: Name (TEAMID)"
+#   DARWINFUSE_INSTALLER_IDENTITY  "Developer ID Installer: Name (TEAMID)"
+#   DARWINFUSE_NOTARY_PROFILE      notarytool keychain profile
+#                                  (xcrun notarytool store-credentials <name> ...)
+#
 # Copyright (c) 2026 Marcel Cotta. All rights reserved.
 # Licensed under the MIT License.
 #
 
 set -euo pipefail
 
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.1.0}"
+APP_IDENTITY="${DARWINFUSE_APP_IDENTITY:-}"
+INSTALLER_IDENTITY="${DARWINFUSE_INSTALLER_IDENTITY:-}"
+NOTARY_PROFILE="${DARWINFUSE_NOTARY_PROFILE:-}"
+
+if [[ -n "$NOTARY_PROFILE" && ( -z "$APP_IDENTITY" || -z "$INSTALLER_IDENTITY" ) ]]; then
+    echo "Error: notarization needs DARWINFUSE_APP_IDENTITY and DARWINFUSE_INSTALLER_IDENTITY" >&2
+    exit 1
+fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build/pkg"
@@ -84,6 +101,18 @@ APPS_DIR="$STAGE_DIR/Applications/DarwinFUSE"
 mkdir -p "$APPS_DIR"
 osacompile -o "$APPS_DIR/Uninstall DarwinFUSE.app" "$SCRIPT_DIR/uninstall.applescript"
 
+# ---- Sign the payload (Developer ID Application, hardened runtime) ----
+
+if [[ -n "$APP_IDENTITY" ]]; then
+    echo "Signing payload..."
+    codesign --force --timestamp --options runtime \
+        --sign "$APP_IDENTITY" "$PREFIX/lib/libfuse.2.dylib"
+    codesign --force --timestamp --options runtime \
+        --sign "$APP_IDENTITY" "$APPS_DIR/Uninstall DarwinFUSE.app"
+    codesign --verify --strict --verbose=1 "$PREFIX/lib/libfuse.2.dylib"
+    codesign --verify --strict --verbose=1 "$APPS_DIR/Uninstall DarwinFUSE.app"
+fi
+
 # ---- Prepare scripts ----
 
 echo "Preparing install scripts..."
@@ -123,11 +152,50 @@ RESOURCES_DIR="$BUILD_DIR/resources"
 mkdir -p "$RESOURCES_DIR"
 cp -R "$SCRIPT_DIR/resources/"*.lproj "$RESOURCES_DIR/"
 
+PRODUCTBUILD_SIGN=()
+if [[ -n "$INSTALLER_IDENTITY" ]]; then
+    PRODUCTBUILD_SIGN=(--sign "$INSTALLER_IDENTITY" --timestamp)
+fi
+
+PKG="$OUTPUT_DIR/DarwinFUSE-$VERSION.pkg"
+
 productbuild \
     --distribution "$DIST_XML" \
     --resources "$RESOURCES_DIR" \
     --package-path "$BUILD_DIR" \
-    "$OUTPUT_DIR/DarwinFUSE-$VERSION.pkg"
+    ${PRODUCTBUILD_SIGN[@]+"${PRODUCTBUILD_SIGN[@]}"} \
+    "$PKG"
+
+if [[ -n "$INSTALLER_IDENTITY" ]]; then
+    pkgutil --check-signature "$PKG"
+fi
+
+# ---- Notarize and staple ----
+
+if [[ -n "$NOTARY_PROFILE" ]]; then
+    echo "Notarizing (this can take a few minutes)..."
+    NOTARY_OUT="$(xcrun notarytool submit "$PKG" --keychain-profile "$NOTARY_PROFILE" \
+        --wait --output-format json)" || true
+    NOTARY_STATUS="$(printf '%s' "$NOTARY_OUT" | plutil -extract status raw -o - - 2>/dev/null || true)"
+    NOTARY_ID="$(printf '%s' "$NOTARY_OUT" | plutil -extract id raw -o - - 2>/dev/null || true)"
+    if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
+        echo "Error: notarization ended with status '${NOTARY_STATUS:-unknown}'" >&2
+        [[ -n "$NOTARY_ID" ]] && xcrun notarytool log "$NOTARY_ID" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+        exit 1
+    fi
+    echo "    Accepted ($NOTARY_ID)"
+
+    # Right after acceptance the ticket can be unavailable for a moment.
+    STAPLED=0
+    for attempt in 1 2 3 4 5 6; do
+        if xcrun stapler staple "$PKG" >/dev/null 2>&1; then STAPLED=1; break; fi
+        echo "    Ticket not available yet (attempt $attempt/6)..."
+        sleep 20
+    done
+    [[ $STAPLED -eq 1 ]] || { echo "Error: could not staple the ticket" >&2; exit 1; }
+    xcrun stapler validate "$PKG"
+    spctl --assess --type install -vv "$PKG"
+fi
 
 # ---- Cleanup intermediate files ----
 
