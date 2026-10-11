@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stand-in for ssh: run the local sftp server, which talks SFTP on stdin/stdout.
+exec /usr/libexec/sftp-server
