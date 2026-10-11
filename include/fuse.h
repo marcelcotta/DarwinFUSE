@@ -359,6 +359,39 @@ int fuse_getgroups(int size, gid_t list[]);
  */
 int fuse_interrupted(void);
 
+/* ---- Compatibility with libfuse 2.9 / macFUSE ---- */
+
+/*
+ * Returns non-zero once fuse_exit() has been called.
+ */
+int fuse_exited(struct fuse *f);
+
+/*
+ * Returns 1 if the option is handled by the library itself (and so must not be
+ * passed on as a filesystem option), 0 otherwise.
+ */
+int fuse_is_lib_option(const char *opt);
+
+/*
+ * Cache invalidation and the "remember" cleanup thread. The NFS client is mounted
+ * without attribute caching and entries are never remembered, so there is nothing
+ * to invalidate or clean: fuse_invalidate_path() reports -ENOENT, which callers
+ * must not treat as an error, and the other three succeed without doing anything.
+ */
+int  fuse_invalidate_path(struct fuse *f, const char *path);
+int  fuse_start_cleanup_thread(struct fuse *f);
+void fuse_stop_cleanup_thread(struct fuse *f);
+int  fuse_clean_cache(struct fuse *f);
+
+/*
+ * Deprecated entry points of libfuse 2.x: fuse_setup() is the part of
+ * fuse_main() before the event loop, fuse_teardown() the part after it.
+ */
+struct fuse *fuse_setup(int argc, char *argv[],
+                        const struct fuse_operations *op, size_t op_size,
+                        char **mountpoint, int *multithreaded, void *user_data);
+void fuse_teardown(struct fuse *fuse, char *mountpoint);
+
 #ifdef __cplusplus
 }
 #endif

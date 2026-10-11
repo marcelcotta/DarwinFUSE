@@ -719,6 +719,109 @@ int fuse_version(void)
     return 26;
 }
 
+int fuse_exited(struct fuse *f)
+{
+    return f ? f->exited : 0;
+}
+
+/*
+ * Options the library handles itself, as in libfuse 2.9 (fuse_lib_opts and
+ * fuse_ll_opts). An entry ending in '=' matches any value.
+ */
+int fuse_is_lib_option(const char *opt)
+{
+    static const char *const lib_opts[] = {
+        "debug", "-d", "hard_remove", "use_ino", "readdir_ino", "direct_io",
+        "kernel_cache", "auto_cache", "noauto_cache", "umask=", "uid=", "gid=",
+        "entry_timeout=", "attr_timeout=", "ac_attr_timeout=",
+        "negative_timeout=", "noforget", "remember=", "intr", "intr_signal=",
+        "modules=", "nopath", "allow_other", "allow_root", "max_write=",
+        "max_readahead=", "max_background=", "congestion_threshold=",
+        "async_read", "sync_read", "atomic_o_trunc", "no_remote_lock",
+        "no_remote_flock", "no_remote_posix_lock", "splice_write",
+        "splice_move", "splice_read", "big_writes", "default_permissions",
+        "nonempty", "fsname=", "subtype=", "blksize=", "max_read=", "large_read",
+    };
+
+    if (!opt) return 0;
+    for (size_t i = 0; i < sizeof(lib_opts) / sizeof(lib_opts[0]); i++) {
+        size_t n = strlen(lib_opts[i]);
+        if (lib_opts[i][n - 1] == '=') {
+            if (strncmp(opt, lib_opts[i], n) == 0) return 1;
+        } else if (strcmp(opt, lib_opts[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int fuse_invalidate_path(struct fuse *f, const char *path)
+{
+    (void)f; (void)path;
+    return -ENOENT;
+}
+
+int fuse_start_cleanup_thread(struct fuse *f)
+{
+    (void)f;
+    return 0;
+}
+
+void fuse_stop_cleanup_thread(struct fuse *f)
+{
+    (void)f;
+}
+
+int fuse_clean_cache(struct fuse *f)
+{
+    (void)f;
+    return 60;   /* seconds until the next cleanup would be due */
+}
+
+struct fuse *fuse_setup(int argc, char *argv[],
+                        const struct fuse_operations *op, size_t op_size,
+                        char **mountpoint, int *multithreaded, void *user_data)
+{
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    struct fuse_chan *ch = NULL;
+    struct fuse *fuse = NULL;
+    int foreground = 0;
+
+    *mountpoint = NULL;
+    if (fuse_parse_cmdline(&args, mountpoint, multithreaded, &foreground) == -1)
+        return NULL;
+
+    ch = fuse_mount(*mountpoint, &args);
+    if (!ch) goto fail;
+
+    fuse = fuse_new(ch, &args, op, op_size, user_data);
+    if (!fuse) goto fail;
+
+    if (fuse_daemonize(foreground) == -1) goto fail;
+    if (fuse_set_signal_handlers(fuse_get_session(fuse)) == -1) goto fail;
+
+    fuse_opt_free_args(&args);
+    return fuse;
+
+fail:
+    if (ch) fuse_unmount(*mountpoint, ch);
+    if (fuse) fuse_destroy(fuse);
+    fuse_opt_free_args(&args);
+    free(*mountpoint);
+    *mountpoint = NULL;
+    return NULL;
+}
+
+void fuse_teardown(struct fuse *fuse, char *mountpoint)
+{
+    if (!fuse) return;
+    struct fuse_chan *ch = fuse->chan;
+    fuse_remove_signal_handlers(fuse_get_session(fuse));
+    fuse_unmount(mountpoint, ch);
+    fuse_destroy(fuse);
+    free(mountpoint);
+}
+
 /* ---- fuse_main / fuse_main_real ---- */
 
 int fuse_main_real(int argc, char *argv[],
