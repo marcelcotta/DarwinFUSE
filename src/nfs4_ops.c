@@ -254,6 +254,10 @@ static const uint32_t supported_bitmap[2] = {
     (1u << (FATTR4_TIME_CREATE - 32)) |
     (1u << (FATTR4_TIME_METADATA - 32)) |
     (1u << (FATTR4_TIME_MODIFY - 32)) |
+    /* The write-only attributes must be listed, or the client never sends a
+     * time change (touch -t, cp -p, rsync -t, tar) at all. */
+    (1u << (FATTR4_TIME_ACCESS_SET - 32)) |
+    (1u << (FATTR4_TIME_MODIFY_SET - 32)) |
     (1u << (FATTR4_MOUNTED_ON_FILEID - 32))
 };
 
@@ -1173,8 +1177,16 @@ static uint32_t handle_readdir(const darwinfuse_config_t *config,
     decode_bitmap(req, attr_bitmap, &attr_nwords);
     if (req->error) return NFS4ERR_INVAL;
 
-    (void)dircount;
-    (void)maxcount;
+    /*
+     * The reply has to fit the client's maxcount (RFC 7530 §16.24), which counts
+     * the operation header (8), cookieverf (8), the entries and the two closing
+     * booleans (8). Entries that do not fit are left for the next call, which
+     * resumes after the last cookie sent. dircount limits cookie + name bytes.
+     */
+    const size_t reply_start = xdr_getpos(rep);
+    size_t reply_limit = maxcount;
+    if (reply_limit == 0 || reply_limit > 256 * 1024)
+        reply_limit = 256 * 1024;
 
     /* Encode cookieverf */
     uint8_t reply_verf[8] = {0};
@@ -1280,12 +1292,24 @@ static uint32_t handle_readdir(const darwinfuse_config_t *config,
     if (config->ops->releasedir)
         config->ops->releasedir(dir_path, &dir_fi);
 
+    int eof = 1;
+    int emitted = 0;
+    size_t dir_bytes = 0;
+
     for (int i = 0; i < collector.count; i++) {
         readdir_entry_t *e = &collector.entries[i];
         if (e->cookie <= cookie) continue;
 
         if (strcmp(e->name, ".") == 0 || strcmp(e->name, "..") == 0)
             continue;
+
+        size_t name_dir_bytes = 8 + 4 + ((strlen(e->name) + 3) & ~(size_t)3);
+        if (emitted > 0 && dircount > 0 && dir_bytes + name_dir_bytes > dircount) {
+            eof = 0;
+            break;
+        }
+
+        const size_t entry_start = xdr_getpos(rep);
 
         xdr_encode_bool(rep, 1);
         xdr_encode_uint64(rep, e->cookie);
@@ -1308,13 +1332,29 @@ static uint32_t handle_readdir(const darwinfuse_config_t *config,
 
         encode_fattr4(rep, &st, attr_bitmap, attr_nwords, efh, efh_len,
                       config, 0);
+
+        if (rep->error || xdr_getpos(rep) - reply_start + 16 > reply_limit) {
+            /* This entry does not fit: take it back and end the page. */
+            xdr_setpos(rep, entry_start);
+            rep->error = 0;
+            if (emitted == 0) {
+                free(collector.entries);
+                free(dir_path);
+                return NFS4ERR_TOOSMALL;
+            }
+            eof = 0;
+            break;
+        }
+
+        emitted++;
+        dir_bytes += name_dir_bytes;
     }
 
     free(collector.entries);
     free(dir_path);
 
     xdr_encode_bool(rep, 0);
-    xdr_encode_bool(rep, 1);
+    xdr_encode_bool(rep, eof);
 
     return NFS4_OK;
 }

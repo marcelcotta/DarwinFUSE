@@ -75,6 +75,7 @@
 #define NFS4ERR_STALE           70
 #define NFS4ERR_BADHANDLE       10001
 #define NFS4ERR_BAD_STATEID     10026
+#define NFS4ERR_TOOSMALL        10005
 #define NFS4ERR_NOTSUPP         10004
 #define NFS4ERR_SERVERFAULT     10006
 #define NFS4ERR_BADTYPE         10007
